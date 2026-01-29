@@ -1,16 +1,22 @@
-# CONJUGATE
+<h1 align="center">CONJUGATE</h1>
 
 <p align="center">
-  <img src="./logo.png" alt="CONJUGATE Logo" width="400"/>
+  <img src="./logo.png" alt="CONJUGATE Logo" width="200"/>
 </p>
 
-**C**loud-native **O**bservability + **N**atural-language **J**oint **U**nderstanding **G**ranular search **A**nalytics **T**unable **E**ngine
+<p align="center">
+  <strong>C</strong>loud-native <strong>O</strong>bservability + <strong>N</strong>atural-language <strong>J</strong>oint <strong>U</strong>nderstanding <strong>G</strong>ranular search <strong>A</strong>nalytics <strong>T</strong>unable <strong>E</strong>ngine
+</p>
 
-**OpenSearch-Compatible | Diagon-Powered | Cloud-Native**
+<p align="center">
+  <strong>OpenSearch-Compatible | Diagon-Powered | Cloud-Native</strong>
+</p>
 
-[![Status](https://img.shields.io/badge/status-design_phase-yellow)](IMPLEMENTATION_ROADMAP.md)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Diagon](https://img.shields.io/badge/powered%20by-Diagon-green)](https://github.com/model-collapse/diagon)
+<p align="center">
+  <a href="IMPLEMENTATION_ROADMAP.md"><img src="https://img.shields.io/badge/status-design_phase-yellow" alt="Status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
+  <a href="https://github.com/model-collapse/diagon"><img src="https://img.shields.io/badge/powered%20by-Diagon-green" alt="Diagon"></a>
+</p>
 
 ---
 

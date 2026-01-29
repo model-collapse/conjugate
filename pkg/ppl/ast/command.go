@@ -859,3 +859,58 @@ func (f *FlattenCommand) commandNode()   {}
 func (f *FlattenCommand) String() string {
 	return fmt.Sprintf("flatten %s", f.Field.String())
 }
+
+// AddtotalsCommand: addtotals [<field1>, <field2>, ...] - Adds a row with totals for numeric fields
+// If no fields are specified, totals are computed for all numeric fields
+// The total row has field values aggregated (sum for numeric, "Total" label for grouping fields)
+type AddtotalsCommand struct {
+	BaseNode
+	Fields      []Expression // Optional: specific fields to total (if empty, total all numeric fields)
+	LabelField  string       // Optional: field to use for the "Total" label (default: first group-by field)
+	Label       string       // Optional: custom label for the total row (default: "Total")
+	FieldName   string       // Optional: name of field for row labels (default: empty)
+}
+
+func (a *AddtotalsCommand) Accept(visitor Visitor) (interface{}, error) {
+	return visitor.VisitAddtotalsCommand(a)
+}
+
+func (a *AddtotalsCommand) Type() NodeType { return NodeTypeAddtotalsCommand }
+func (a *AddtotalsCommand) commandNode()   {}
+func (a *AddtotalsCommand) String() string {
+	if len(a.Fields) == 0 {
+		return "addtotals"
+	}
+	fields := make([]string, len(a.Fields))
+	for i, f := range a.Fields {
+		fields[i] = f.String()
+	}
+	return fmt.Sprintf("addtotals %s", strings.Join(fields, ", "))
+}
+
+// AddcoltotalsCommand: addcoltotals [<field1>, <field2>, ...] - Adds a column with totals for numeric fields
+// If no fields are specified, totals are computed for all numeric fields
+// The total column has field values aggregated (sum for numeric)
+type AddcoltotalsCommand struct {
+	BaseNode
+	Fields     []Expression // Optional: specific fields to total (if empty, total all numeric fields)
+	LabelField string       // Optional: field to use for the "Total" label
+	Label      string       // Optional: custom label for the total column (default: "Total")
+}
+
+func (a *AddcoltotalsCommand) Accept(visitor Visitor) (interface{}, error) {
+	return visitor.VisitAddcoltotalsCommand(a)
+}
+
+func (a *AddcoltotalsCommand) Type() NodeType { return NodeTypeAddcoltotalsCommand }
+func (a *AddcoltotalsCommand) commandNode()   {}
+func (a *AddcoltotalsCommand) String() string {
+	if len(a.Fields) == 0 {
+		return "addcoltotals"
+	}
+	fields := make([]string, len(a.Fields))
+	for i, f := range a.Fields {
+		fields[i] = f.String()
+	}
+	return fmt.Sprintf("addcoltotals %s", strings.Join(fields, ", "))
+}

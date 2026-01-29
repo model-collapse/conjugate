@@ -52,6 +52,8 @@ const (
 	NodeTypeExplainCommand
 	NodeTypeReverseCommand
 	NodeTypeFlattenCommand
+	NodeTypeAddtotalsCommand
+	NodeTypeAddcoltotalsCommand
 
 	// Expression nodes
 	NodeTypeBinaryExpression
@@ -131,6 +133,10 @@ func (t NodeType) String() string {
 		return "ReverseCommand"
 	case NodeTypeFlattenCommand:
 		return "FlattenCommand"
+	case NodeTypeAddtotalsCommand:
+		return "AddtotalsCommand"
+	case NodeTypeAddcoltotalsCommand:
+		return "AddcoltotalsCommand"
 	// Expression nodes
 	case NodeTypeBinaryExpression:
 		return "BinaryExpression"

@@ -38,6 +38,8 @@ type Visitor interface {
 	VisitStreamstatsCommand(*StreamstatsCommand) (interface{}, error)
 	VisitReverseCommand(*ReverseCommand) (interface{}, error)
 	VisitFlattenCommand(*FlattenCommand) (interface{}, error)
+	VisitAddtotalsCommand(*AddtotalsCommand) (interface{}, error)
+	VisitAddcoltotalsCommand(*AddcoltotalsCommand) (interface{}, error)
 
 	// Expressions
 	VisitBinaryExpression(*BinaryExpression) (interface{}, error)
@@ -176,6 +178,14 @@ func (b *BaseVisitor) VisitReverseCommand(r *ReverseCommand) (interface{}, error
 }
 
 func (b *BaseVisitor) VisitFlattenCommand(f *FlattenCommand) (interface{}, error) {
+	return nil, nil
+}
+
+func (b *BaseVisitor) VisitAddtotalsCommand(a *AddtotalsCommand) (interface{}, error) {
+	return nil, nil
+}
+
+func (b *BaseVisitor) VisitAddcoltotalsCommand(a *AddcoltotalsCommand) (interface{}, error) {
 	return nil, nil
 }
 

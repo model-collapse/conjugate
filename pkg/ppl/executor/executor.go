@@ -298,6 +298,20 @@ func (e *Executor) buildOperator(plan physical.PhysicalPlan) (Operator, error) {
 		}
 		return NewStreamstatsOperator(input, p.GroupBy, p.Aggregations, p.Window, e.logger), nil
 
+	case *physical.PhysicalAddtotals:
+		input, err := e.buildOperator(p.Input)
+		if err != nil {
+			return nil, err
+		}
+		return NewAddtotalsOperator(input, p.Fields, p.LabelField, p.Label, p.FieldName, e.logger), nil
+
+	case *physical.PhysicalAddcoltotals:
+		input, err := e.buildOperator(p.Input)
+		if err != nil {
+			return nil, err
+		}
+		return NewAddcoltotalsOperator(input, p.Fields, p.LabelField, p.Label, e.logger), nil
+
 	default:
 		return nil, fmt.Errorf("unsupported physical plan type: %T", plan)
 	}

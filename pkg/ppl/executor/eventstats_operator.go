@@ -249,23 +249,7 @@ func (e *eventstatsOperator) computeAggregation(agg *ast.Aggregation, rows []*Ro
 	}
 }
 
-// toFloat64 converts various numeric types to float64
-func toFloat64(val interface{}) (float64, bool) {
-	switch v := val.(type) {
-	case int:
-		return float64(v), true
-	case int32:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case float32:
-		return float64(v), true
-	case float64:
-		return v, true
-	default:
-		return 0, false
-	}
-}
+// toFloat64 is now in utils.go
 
 // compareValues compares two values for min/max operations
 func compareValues(a, b interface{}) int {

@@ -715,3 +715,52 @@ func (p *PhysicalFlatten) Location() ExecutionLocation      { return ExecuteOnCo
 func (p *PhysicalFlatten) String() string {
 	return fmt.Sprintf("Flatten(%s)", p.Field.String())
 }
+
+// PhysicalAddtotals adds a summary row with totals for numeric fields
+// Must execute on coordinator after all rows are available
+type PhysicalAddtotals struct {
+	Input        PhysicalPlan
+	Fields       []ast.Expression // Specific fields to total (if empty, total all numeric)
+	LabelField   string           // Field to use for "Total" label
+	Label        string           // Label for the total row (default: "Total")
+	FieldName    string           // Name of field for row labels
+	OutputSchema *analyzer.Schema
+}
+
+func (p *PhysicalAddtotals) Schema() *analyzer.Schema    { return p.OutputSchema }
+func (p *PhysicalAddtotals) Children() []PhysicalPlan    { return []PhysicalPlan{p.Input} }
+func (p *PhysicalAddtotals) Location() ExecutionLocation { return ExecuteOnCoordinator }
+func (p *PhysicalAddtotals) String() string {
+	if len(p.Fields) == 0 {
+		return "Addtotals(all numeric fields)"
+	}
+	fields := make([]string, len(p.Fields))
+	for i, f := range p.Fields {
+		fields[i] = f.String()
+	}
+	return fmt.Sprintf("Addtotals(fields=[%s])", strings.Join(fields, ", "))
+}
+
+// PhysicalAddcoltotals adds a column with totals for numeric fields
+// Must execute on coordinator after all rows are available
+type PhysicalAddcoltotals struct {
+	Input        PhysicalPlan
+	Fields       []ast.Expression // Specific fields to total (if empty, total all numeric)
+	LabelField   string           // Field to use for "Total" label
+	Label        string           // Label for the total column (default: "Total")
+	OutputSchema *analyzer.Schema
+}
+
+func (p *PhysicalAddcoltotals) Schema() *analyzer.Schema    { return p.OutputSchema }
+func (p *PhysicalAddcoltotals) Children() []PhysicalPlan    { return []PhysicalPlan{p.Input} }
+func (p *PhysicalAddcoltotals) Location() ExecutionLocation { return ExecuteOnCoordinator }
+func (p *PhysicalAddcoltotals) String() string {
+	if len(p.Fields) == 0 {
+		return "Addcoltotals(all numeric fields)"
+	}
+	fields := make([]string, len(p.Fields))
+	for i, f := range p.Fields {
+		fields[i] = f.String()
+	}
+	return fmt.Sprintf("Addcoltotals(fields=[%s])", strings.Join(fields, ", "))
+}
