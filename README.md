@@ -1,4 +1,9 @@
 # CONJUGATE
+
+<p align="center">
+  <img src="./logo.png" alt="CONJUGATE Logo" width="400"/>
+</p>
+
 **C**loud-native **O**bservability + **N**atural-language **J**oint **U**nderstanding **G**ranular search **A**nalytics **T**unable **E**ngine
 
 **OpenSearch-Compatible | Diagon-Powered | Cloud-Native**
