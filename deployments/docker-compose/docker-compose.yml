@@ -1,0 +1,164 @@
+version: '3.8'
+
+# CONJUGATE Development Cluster
+# Single-node setup for local development and testing
+
+services:
+  # Master Node (Raft consensus, cluster state)
+  master:
+    image: conjugate/master:dev
+    container_name: conjugate-master-1
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.master
+    ports:
+      - "9300:9300"  # Raft port
+      - "9301:9301"  # gRPC port
+      - "9400:9400"  # Metrics port
+    volumes:
+      - master-data:/var/lib/conjugate/master
+      - ../../config:/etc/conjugate:ro
+    environment:
+      - CONJUGATE_NODE_ID=master-1
+      - CONJUGATE_BIND_ADDR=0.0.0.0
+      - CONJUGATE_RAFT_PORT=9300
+      - CONJUGATE_GRPC_PORT=9301
+      - CONJUGATE_LOG_LEVEL=debug
+    networks:
+      - conjugate
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:9301"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Coordination Node (Query planning, REST API)
+  coordination:
+    image: conjugate/coordination:dev
+    container_name: conjugate-coordination-1
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.coordination
+    ports:
+      - "9200:9200"  # REST API (OpenSearch compatible)
+      - "9302:9302"  # gRPC port
+      - "9401:9401"  # Metrics port
+    volumes:
+      - ../../config:/etc/conjugate:ro
+      - ../../python:/opt/conjugate/python:ro
+    environment:
+      - CONJUGATE_NODE_ID=coordination-1
+      - CONJUGATE_BIND_ADDR=0.0.0.0
+      - CONJUGATE_REST_PORT=9200
+      - CONJUGATE_GRPC_PORT=9302
+      - CONJUGATE_MASTER_ADDR=master:9301
+      - CONJUGATE_CALCITE_ADDR=calcite:50051
+      - CONJUGATE_LOG_LEVEL=debug
+      - CONJUGATE_PYTHON_ENABLED=true
+    depends_on:
+      - master
+      - calcite
+    networks:
+      - conjugate
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Data Node (Diagon - Inverted + Forward + Computation)
+  data:
+    image: conjugate/data:dev
+    container_name: conjugate-data-1
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.data
+    ports:
+      - "9303:9303"  # gRPC port
+      - "9402:9402"  # Metrics port
+    volumes:
+      - data-storage:/var/lib/conjugate/data
+      - ../../config:/etc/conjugate:ro
+    environment:
+      - CONJUGATE_NODE_ID=data-1
+      - CONJUGATE_BIND_ADDR=0.0.0.0
+      - CONJUGATE_GRPC_PORT=9303
+      - CONJUGATE_MASTER_ADDR=master:9301
+      - CONJUGATE_STORAGE_TIER=hot
+      - CONJUGATE_MAX_SHARDS=100
+      - CONJUGATE_LOG_LEVEL=debug
+      - CONJUGATE_SIMD_ENABLED=true
+    depends_on:
+      - master
+    networks:
+      - conjugate
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:9303"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Apache Calcite (Query planner/optimizer)
+  calcite:
+    image: conjugate/calcite:dev
+    container_name: conjugate-calcite
+    build:
+      context: ../../calcite
+      dockerfile: Dockerfile
+    ports:
+      - "50051:50051"  # gRPC port
+      - "9403:9403"    # Metrics port
+    environment:
+      - CALCITE_PORT=50051
+      - CALCITE_LOG_LEVEL=INFO
+    networks:
+      - conjugate
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=localhost:50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Prometheus (Metrics collection)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: conjugate-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+    networks:
+      - conjugate
+
+  # Grafana (Metrics visualization)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: conjugate-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana-dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    depends_on:
+      - prometheus
+    networks:
+      - conjugate
+
+volumes:
+  master-data:
+  data-storage:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  conjugate:
+    driver: bridge

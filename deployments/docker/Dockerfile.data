@@ -1,0 +1,77 @@
+# Multi-stage build for CONJUGATE Data Node
+# Stage 1: Builder
+FROM golang:1.22-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY cmd/ ./cmd/
+COPY pkg/ ./pkg/
+
+# Build arguments for version information
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG VCS_REF
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
+    go build -a -installsuffix cgo \
+    -ldflags="-w -s -X main.version=${VERSION} -X main.commit=${VCS_REF} -X main.date=${BUILD_DATE}" \
+    -o conjugate-data \
+    ./cmd/data
+
+# Stage 2: Runtime
+FROM alpine:3.19
+
+# Add metadata labels
+LABEL org.opencontainers.image.title="CONJUGATE Data Node"
+LABEL org.opencontainers.image.description="Distributed search engine data node with Diagon backend"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.source="https://github.com/conjugate/conjugate"
+LABEL org.opencontainers.image.vendor="CONJUGATE"
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata
+
+# Create non-root user
+RUN addgroup -g 1000 conjugate && \
+    adduser -D -u 1000 -G conjugate conjugate
+
+# Create data directory
+RUN mkdir -p /data/shards && \
+    chown -R conjugate:conjugate /data
+
+# Copy binary from builder
+COPY --from=builder /build/conjugate-data /usr/local/bin/conjugate-data
+
+# Copy default configuration
+COPY config/docker-data.yaml /etc/conjugate/data.yaml
+RUN chown conjugate:conjugate /etc/conjugate/data.yaml
+
+# Switch to non-root user
+USER conjugate
+
+# Set working directory
+WORKDIR /data
+
+# Expose ports
+# 9303: gRPC API
+EXPOSE 9303
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD ["/usr/local/bin/conjugate-data", "health"]
+
+# Default command
+ENTRYPOINT ["/usr/local/bin/conjugate-data"]
+CMD ["--config", "/etc/conjugate/data.yaml"]

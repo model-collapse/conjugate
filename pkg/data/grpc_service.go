@@ -1,0 +1,695 @@
+package data
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	pb "github.com/conjugate/conjugate/pkg/common/proto"
+	"github.com/conjugate/conjugate/pkg/data/diagon"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// DataService implements the gRPC DataService
+type DataService struct {
+	pb.UnimplementedDataServiceServer
+	node   *DataNode
+	logger *zap.Logger
+}
+
+// NewDataService creates a new data service
+func NewDataService(node *DataNode, logger *zap.Logger) *DataService {
+	return &DataService{
+		node:   node,
+		logger: logger,
+	}
+}
+
+// CreateShard creates a new shard on this data node
+func (s *DataService) CreateShard(ctx context.Context, req *pb.CreateShardRequest) (*pb.CreateShardResponse, error) {
+	s.logger.Info("CreateShard request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId),
+		zap.Bool("is_primary", req.IsPrimary))
+
+	// Validate request
+	if req.IndexName == "" {
+		return nil, status.Error(codes.InvalidArgument, "index name is required")
+	}
+	if req.ShardId < 0 {
+		return nil, status.Error(codes.InvalidArgument, "shard_id must be non-negative")
+	}
+
+	// Create shard
+	if err := s.node.shards.CreateShard(ctx, req.IndexName, req.ShardId, req.IsPrimary); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create shard: %v", err)
+	}
+
+	shardKey := shardKey(req.IndexName, req.ShardId)
+
+	return &pb.CreateShardResponse{
+		Acknowledged: true,
+		ShardKey:     shardKey,
+	}, nil
+}
+
+// DeleteShard deletes a shard from this data node
+func (s *DataService) DeleteShard(ctx context.Context, req *pb.DeleteShardRequest) (*pb.DeleteShardResponse, error) {
+	s.logger.Info("DeleteShard request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId))
+
+	// Validate request
+	if req.IndexName == "" {
+		return nil, status.Error(codes.InvalidArgument, "index name is required")
+	}
+
+	// Delete shard
+	if err := s.node.shards.DeleteShard(ctx, req.IndexName, req.ShardId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete shard: %v", err)
+	}
+
+	return &pb.DeleteShardResponse{
+		Acknowledged: true,
+	}, nil
+}
+
+// GetShardInfo returns information about a shard
+func (s *DataService) GetShardInfo(ctx context.Context, req *pb.GetShardInfoRequest) (*pb.ShardInfo, error) {
+	s.logger.Debug("GetShardInfo request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId))
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	// Convert to proto
+	return &pb.ShardInfo{
+		IndexName:   shard.IndexName,
+		ShardId:     shard.ShardID,
+		IsPrimary:   shard.IsPrimary,
+		State:       s.convertShardStateToProto(shard.State),
+		DocsCount:   shard.DocsCount,
+		SizeBytes:   shard.SizeBytes,
+		CreatedAt:   timestamppb.New(time.Now()), // TODO: Store creation time
+		LastUpdated: timestamppb.New(time.Now()),
+	}, nil
+}
+
+// RefreshShard makes recently indexed documents searchable
+func (s *DataService) RefreshShard(ctx context.Context, req *pb.RefreshShardRequest) (*pb.RefreshShardResponse, error) {
+	s.logger.Debug("RefreshShard request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId))
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	// Refresh shard
+	if err := shard.Refresh(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to refresh shard: %v", err)
+	}
+
+	return &pb.RefreshShardResponse{
+		Acknowledged: true,
+	}, nil
+}
+
+// FlushShard flushes shard data to disk
+func (s *DataService) FlushShard(ctx context.Context, req *pb.FlushShardRequest) (*pb.FlushShardResponse, error) {
+	s.logger.Debug("FlushShard request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId))
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	// Flush pending batch documents first
+	if err := shard.Flush(ctx); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to flush pending documents: %v", err)
+	}
+
+	// Flush Diagon translog
+	if err := shard.FlushDiagon(); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to flush shard: %v", err)
+	}
+
+	return &pb.FlushShardResponse{
+		Acknowledged: true,
+	}, nil
+}
+
+// IndexDocument indexes a document into a shard
+func (s *DataService) IndexDocument(ctx context.Context, req *pb.IndexDocumentRequest) (*pb.IndexDocumentResponse, error) {
+	s.logger.Info("==> DataService.IndexDocument ENTRY",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId),
+		zap.String("doc_id", req.DocId))
+
+	// Validate request
+	if req.IndexName == "" {
+		s.logger.Error("IndexDocument validation failed: index name is required")
+		return nil, status.Error(codes.InvalidArgument, "index name is required")
+	}
+	if req.DocId == "" {
+		s.logger.Error("IndexDocument validation failed: doc_id is required")
+		return nil, status.Error(codes.InvalidArgument, "doc_id is required")
+	}
+	if req.Document == nil {
+		s.logger.Error("IndexDocument validation failed: document is required")
+		return nil, status.Error(codes.InvalidArgument, "document is required")
+	}
+
+	s.logger.Info("IndexDocument validation passed", zap.String("doc_id", req.DocId))
+
+	// Get shard
+	s.logger.Info("Getting shard",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId))
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		s.logger.Error("Failed to get shard",
+			zap.String("index", req.IndexName),
+			zap.Int32("shard_id", req.ShardId),
+			zap.Error(err))
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	s.logger.Info("Got shard successfully", zap.String("doc_id", req.DocId))
+
+	// Convert protobuf Struct to map
+	doc := req.Document.AsMap()
+	s.logger.Info("Converted document to map",
+		zap.String("doc_id", req.DocId),
+		zap.Int("num_fields", len(doc)))
+
+	// Index document
+	s.logger.Info("Calling shard.IndexDocument", zap.String("doc_id", req.DocId))
+	if err := shard.IndexDocument(ctx, req.DocId, doc); err != nil {
+		s.logger.Error("shard.IndexDocument FAILED",
+			zap.String("doc_id", req.DocId),
+			zap.Error(err))
+		return nil, status.Errorf(codes.Internal, "failed to index document: %v", err)
+	}
+
+	s.logger.Info("shard.IndexDocument SUCCESS", zap.String("doc_id", req.DocId))
+
+	s.logger.Info("Returning IndexDocumentResponse",
+		zap.String("doc_id", req.DocId),
+		zap.Int64("version", 1))
+
+	return &pb.IndexDocumentResponse{
+		Acknowledged: true,
+		DocId:        req.DocId,
+		Version:      1, // TODO: Implement versioning
+	}, nil
+}
+
+// GetDocument retrieves a document by ID
+func (s *DataService) GetDocument(ctx context.Context, req *pb.GetDocumentRequest) (*pb.GetDocumentResponse, error) {
+	s.logger.Debug("GetDocument request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId),
+		zap.String("doc_id", req.DocId))
+
+	// Validate request
+	if req.IndexName == "" {
+		return nil, status.Error(codes.InvalidArgument, "index name is required")
+	}
+	if req.DocId == "" {
+		return nil, status.Error(codes.InvalidArgument, "doc_id is required")
+	}
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	// Get document
+	doc, err := shard.GetDocument(ctx, req.DocId)
+	if err != nil {
+		// Document not found - log the actual error
+		s.logger.Warn("GetDocument failed",
+			zap.String("index", req.IndexName),
+			zap.Int32("shard_id", req.ShardId),
+			zap.String("doc_id", req.DocId),
+			zap.Error(err))
+		return &pb.GetDocumentResponse{
+			Found: false,
+			DocId: req.DocId,
+		}, nil
+	}
+
+	// Convert map to protobuf Struct
+	docStruct, err := structpb.NewStruct(doc)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to convert document: %v", err)
+	}
+
+	return &pb.GetDocumentResponse{
+		Found:    true,
+		DocId:    req.DocId,
+		Document: docStruct,
+		Version:  1, // TODO: Implement versioning
+	}, nil
+}
+
+// DeleteDocument deletes a document by ID
+func (s *DataService) DeleteDocument(ctx context.Context, req *pb.DeleteDocumentRequest) (*pb.DeleteDocumentResponse, error) {
+	s.logger.Debug("DeleteDocument request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId),
+		zap.String("doc_id", req.DocId))
+
+	// Validate request
+	if req.IndexName == "" {
+		return nil, status.Error(codes.InvalidArgument, "index name is required")
+	}
+	if req.DocId == "" {
+		return nil, status.Error(codes.InvalidArgument, "doc_id is required")
+	}
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	// Delete document
+	if err := shard.DeleteDocument(ctx, req.DocId); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to delete document: %v", err)
+	}
+
+	return &pb.DeleteDocumentResponse{
+		Acknowledged: true,
+		Found:        true, // TODO: Check if document existed
+	}, nil
+}
+
+// BulkIndex indexes multiple documents in a single request
+func (s *DataService) BulkIndex(ctx context.Context, req *pb.BulkIndexRequest) (*pb.BulkIndexResponse, error) {
+	s.logger.Debug("BulkIndex request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId),
+		zap.Int("items", len(req.Items)))
+
+	// Validate request
+	if req.IndexName == "" {
+		return nil, status.Error(codes.InvalidArgument, "index name is required")
+	}
+	if len(req.Items) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "items are required")
+	}
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	startTime := time.Now()
+	hasErrors := false
+	items := make([]*pb.BulkIndexItemResponse, 0, len(req.Items))
+
+	// Index each document
+	for _, item := range req.Items {
+		doc := item.Document.AsMap()
+		err := shard.IndexDocument(ctx, item.DocId, doc)
+
+		itemResp := &pb.BulkIndexItemResponse{
+			DocId: item.DocId,
+		}
+
+		if err != nil {
+			hasErrors = true
+			itemResp.Acknowledged = false
+			itemResp.Error = err.Error()
+		} else {
+			itemResp.Acknowledged = true
+		}
+
+		items = append(items, itemResp)
+	}
+
+	tookMillis := time.Since(startTime).Milliseconds()
+
+	return &pb.BulkIndexResponse{
+		HasErrors:   hasErrors,
+		Items:       items,
+		TookMillis:  tookMillis,
+	}, nil
+}
+
+// Search executes a search query on a shard
+func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
+	s.logger.Info("==> DataService.Search ENTRY",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId),
+		zap.String("query", string(req.Query)))
+
+	// Validate request
+	if req.IndexName == "" {
+		s.logger.Error("Search failed: index name is required")
+		return nil, status.Error(codes.InvalidArgument, "index name is required")
+	}
+	if req.Query == nil {
+		s.logger.Error("Search failed: query is required")
+		return nil, status.Error(codes.InvalidArgument, "query is required")
+	}
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	startTime := time.Now()
+
+	s.logger.Info("DEBUG: About to call shard.Search",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId))
+
+	// Execute search (UDF queries are embedded in req.Query JSON)
+	result, err := shard.Search(ctx, req.Query)
+
+	s.logger.Info("DEBUG: shard.Search returned",
+		zap.Bool("has_result", result != nil),
+		zap.Bool("has_error", err != nil))
+
+	if result != nil {
+		s.logger.Info("DEBUG: Search result details",
+			zap.Int64("total_hits", result.TotalHits),
+			zap.Int("num_hits", len(result.Hits)))
+	}
+
+	if err != nil {
+		s.logger.Error("DEBUG: Search error", zap.Error(err))
+		return nil, status.Errorf(codes.Internal, "search failed: %v", err)
+	}
+
+	tookMillis := time.Since(startTime).Milliseconds()
+
+	// Convert search result to proto
+	hits := make([]*pb.SearchHit, 0, len(result.Hits))
+	for _, hit := range result.Hits {
+		// Convert document to protobuf Struct
+		docStruct, err := structpb.NewStruct(hit.Source)
+		if err != nil {
+			s.logger.Error("Failed to convert document", zap.Error(err))
+			continue
+		}
+
+		hits = append(hits, &pb.SearchHit{
+			Id:     hit.ID,
+			Score:  hit.Score,
+			Source: docStruct,
+		})
+	}
+
+	// Convert aggregations
+	aggregations := convertAggregations(result.Aggregations)
+
+	return &pb.SearchResponse{
+		TookMillis: tookMillis,
+		TimedOut:   false,
+		Shards: &pb.ShardSearchStats{
+			Total:      1,
+			Successful: 1,
+			Failed:     0,
+		},
+		Hits: &pb.SearchHits{
+			Total: &pb.TotalHits{
+				Value:    result.TotalHits,
+				Relation: "eq",
+			},
+			MaxScore: result.MaxScore,
+			Hits:     hits,
+		},
+		Aggregations: aggregations,
+	}, nil
+}
+
+// Count returns the count of documents matching a query
+func (s *DataService) Count(ctx context.Context, req *pb.CountRequest) (*pb.CountResponse, error) {
+	s.logger.Debug("Count request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId))
+
+	// Validate request
+	if req.IndexName == "" {
+		return nil, status.Error(codes.InvalidArgument, "index name is required")
+	}
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	// For now, return document count
+	// TODO: Implement query-based counting
+	_ = req.Query
+
+	stats := shard.Stats()
+
+	return &pb.CountResponse{
+		Count: stats.DocsCount,
+	}, nil
+}
+
+// GetShardStats returns statistics for a specific shard
+func (s *DataService) GetShardStats(ctx context.Context, req *pb.GetShardStatsRequest) (*pb.ShardStats, error) {
+	s.logger.Debug("GetShardStats request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId))
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	// Get stats
+	stats := shard.Stats()
+
+	return &pb.ShardStats{
+		IndexName:               stats.IndexName,
+		ShardId:                 stats.ShardID,
+		IsPrimary:               stats.IsPrimary,
+		DocsCount:               stats.DocsCount,
+		DocsDeleted:             0, // TODO: Track deleted docs
+		SizeBytes:               stats.SizeBytes,
+		SearchQueriesTotal:      0, // TODO: Track query metrics
+		SearchQueriesTimeMillis: 0,
+		IndexingTotal:           0, // TODO: Track indexing metrics
+		IndexingTimeMillis:      0,
+	}, nil
+}
+
+// GetNodeStats returns statistics for the entire node
+func (s *DataService) GetNodeStats(ctx context.Context, req *pb.GetNodeStatsRequest) (*pb.DataNodeStats, error) {
+	s.logger.Debug("GetNodeStats request",
+		zap.Bool("include_shards", req.IncludeShards))
+
+	// Get all shards
+	shards := s.node.shards.List()
+
+	// Aggregate stats
+	var totalDocs, totalSize int64
+	shardStats := make([]*pb.ShardStats, 0, len(shards))
+
+	for _, shard := range shards {
+		stats := shard.Stats()
+		totalDocs += stats.DocsCount
+		totalSize += stats.SizeBytes
+
+		if req.IncludeShards {
+			shardStats = append(shardStats, &pb.ShardStats{
+				IndexName:               stats.IndexName,
+				ShardId:                 stats.ShardID,
+				IsPrimary:               stats.IsPrimary,
+				DocsCount:               stats.DocsCount,
+				DocsDeleted:             0, // TODO: Track deleted docs
+				SizeBytes:               stats.SizeBytes,
+				SearchQueriesTotal:      0, // TODO: Track query metrics
+				SearchQueriesTimeMillis: 0,
+				IndexingTotal:           0, // TODO: Track indexing metrics
+				IndexingTimeMillis:      0,
+			})
+		}
+	}
+
+	// TODO: Get actual CPU, memory, disk usage
+	nodeStats := &pb.DataNodeStats{
+		NodeId:              s.node.cfg.NodeID,
+		TotalShards:         int32(len(shards)),
+		TotalDocs:           totalDocs,
+		TotalSizeBytes:      totalSize,
+		CpuUsagePercent:     0.0,  // TODO: Implement
+		MemoryUsagePercent:  0.0,  // TODO: Implement
+		DiskUsagePercent:    0.0,  // TODO: Implement
+		UptimeSeconds:       0,    // TODO: Track uptime
+		Shards:              shardStats,
+	}
+
+	return nodeStats, nil
+}
+
+// Helper functions
+
+func (s *DataService) convertShardStateToProto(state ShardState) pb.ShardInfo_ShardState {
+	switch state {
+	case ShardStateInitializing:
+		return pb.ShardInfo_SHARD_STATE_INITIALIZING
+	case ShardStateStarted:
+		return pb.ShardInfo_SHARD_STATE_STARTED
+	case ShardStateRelocating:
+		return pb.ShardInfo_SHARD_STATE_RELOCATING
+	case ShardStateClosed:
+		return pb.ShardInfo_SHARD_STATE_CLOSED
+	default:
+		return pb.ShardInfo_SHARD_STATE_UNKNOWN
+	}
+}
+
+// Helper function for document conversion
+func convertDocumentToJSON(doc map[string]interface{}) ([]byte, error) {
+	return json.Marshal(doc)
+}
+
+func convertJSONToDocument(data []byte) (map[string]interface{}, error) {
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}
+
+// convertAggregations converts Diagon aggregations to protobuf format
+func convertAggregations(aggs map[string]diagon.AggregationResult) map[string]*pb.AggregationResult {
+	if len(aggs) == 0 {
+		return nil
+	}
+
+	result := make(map[string]*pb.AggregationResult, len(aggs))
+
+	for name, agg := range aggs {
+		pbAgg := &pb.AggregationResult{
+			Type: agg.Type,
+		}
+
+		// Convert based on aggregation type
+		switch agg.Type {
+		case "terms", "histogram", "date_histogram", "range", "filters":
+			// Bucket aggregations
+			pbAgg.Buckets = convertBuckets(agg.Buckets)
+
+		case "stats", "extended_stats":
+			// Stats aggregations
+			pbAgg.Count = agg.Count
+			pbAgg.Min = agg.Min
+			pbAgg.Max = agg.Max
+			pbAgg.Avg = agg.Avg
+			pbAgg.Sum = agg.Sum
+
+			if agg.Type == "extended_stats" {
+// 				pbAgg.SumOfSquares = agg.SumOfSquares
+// 				pbAgg.Variance = agg.Variance
+// 				pbAgg.StdDeviation = agg.StdDeviation
+// 				pbAgg.StdDeviationBoundsUpper = agg.StdDeviationBoundsUpper
+// 				pbAgg.StdDeviationBoundsLower = agg.StdDeviationBoundsLower
+			}
+
+		case "avg":
+			// Average aggregation
+			pbAgg.Avg = agg.Avg
+
+		case "min":
+			// Minimum aggregation
+			pbAgg.Min = agg.Min
+
+		case "max":
+			// Maximum aggregation
+			pbAgg.Max = agg.Max
+
+		case "sum":
+			// Sum aggregation
+			pbAgg.Sum = agg.Sum
+
+		case "value_count":
+			// Value count aggregation
+			pbAgg.Count = agg.Count
+
+		case "percentiles":
+			// Percentiles aggregation
+			if agg.Values != nil {
+				pbAgg.Values = make(map[string]float64, len(agg.Values))
+				for k, v := range agg.Values {
+					pbAgg.Values[k] = v
+				}
+			}
+
+		case "cardinality":
+			// Cardinality aggregation
+			pbAgg.Value = agg.Value
+		}
+
+		result[name] = pbAgg
+	}
+
+	return result
+}
+
+// convertBuckets converts bucket data to protobuf format
+func convertBuckets(buckets []map[string]interface{}) []*pb.AggregationBucket {
+	if len(buckets) == 0 {
+		return nil
+	}
+
+	result := make([]*pb.AggregationBucket, 0, len(buckets))
+
+	for _, bucket := range buckets {
+		pbBucket := &pb.AggregationBucket{}
+
+		// Extract key (can be string or number)
+		if key, ok := bucket["key"].(string); ok {
+			pbBucket.Key = key
+		}
+		if numKey, ok := bucket["key"].(float64); ok {
+			pbBucket.NumericKey = numKey
+		}
+
+		// Extract key_as_string for date histograms
+		if keyAsString, ok := bucket["key_as_string"].(string); ok {
+			pbBucket.Key = keyAsString
+		}
+
+		// Extract doc_count
+		if docCount, ok := bucket["doc_count"].(int64); ok {
+			pbBucket.DocCount = docCount
+		} else if docCount, ok := bucket["doc_count"].(float64); ok {
+			pbBucket.DocCount = int64(docCount)
+		}
+
+		// TODO: Handle sub-aggregations if needed
+		// pbBucket.SubAggregations = convertAggregations(bucket["sub_aggs"])
+
+		result = append(result, pbBucket)
+	}
+
+	return result
+}

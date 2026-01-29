@@ -1,0 +1,10 @@
+# ANTLR4 generated files
+generated/
+*.interp
+*.tokens
+
+# ANTLR4 JAR (downloaded by Makefile)
+antlr-*.jar
+
+# Compiled test programs
+*.class

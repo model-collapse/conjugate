@@ -1,0 +1,739 @@
+// Copyright 2024 Quidditch Project
+// Licensed under the Apache License, Version 2.0
+
+package parser
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/antlr4-go/antlr/v4"
+	"github.com/quidditch/quidditch/pkg/ppl/ast"
+	"github.com/quidditch/quidditch/pkg/ppl/parser/generated"
+)
+
+// ASTBuilder converts ANTLR4 parse trees to AST nodes
+type ASTBuilder struct {
+	generated.BasePPLParserVisitor
+}
+
+// NewASTBuilder creates a new AST builder
+func NewASTBuilder() *ASTBuilder {
+	return &ASTBuilder{}
+}
+
+// Helper function to get position from ANTLR4 context
+func getPosition(ctx antlr.ParserRuleContext) ast.Position {
+	if ctx == nil {
+		return ast.NoPos
+	}
+	token := ctx.GetStart()
+	return ast.NewPosition(
+		token.GetLine(),
+		token.GetColumn()+1, // ANTLR uses 0-indexed columns
+		token.GetStart(),
+	)
+}
+
+// VisitQuery builds a Query AST node
+func (b *ASTBuilder) VisitQuery(ctx *generated.QueryContext) (interface{}, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("nil query context")
+	}
+
+	commands := make([]ast.Command, 0)
+	for _, cmdCtx := range ctx.AllCommand() {
+		cmd, err := b.VisitCommand(cmdCtx.(*generated.CommandContext))
+		if err != nil {
+			return nil, err
+		}
+		commands = append(commands, cmd.(ast.Command))
+	}
+
+	return &ast.Query{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+		Commands: commands,
+	}, nil
+}
+
+// VisitCommand dispatches to specific command visitors
+func (b *ASTBuilder) VisitCommand(ctx *generated.CommandContext) (interface{}, error) {
+	switch {
+	case ctx.SearchCommand() != nil:
+		return b.VisitSearchCommand(ctx.SearchCommand().(*generated.SearchCommandContext))
+	case ctx.WhereCommand() != nil:
+		return b.VisitWhereCommand(ctx.WhereCommand().(*generated.WhereCommandContext))
+	case ctx.FieldsCommand() != nil:
+		return b.VisitFieldsCommand(ctx.FieldsCommand().(*generated.FieldsCommandContext))
+	case ctx.StatsCommand() != nil:
+		return b.VisitStatsCommand(ctx.StatsCommand().(*generated.StatsCommandContext))
+	case ctx.SortCommand() != nil:
+		return b.VisitSortCommand(ctx.SortCommand().(*generated.SortCommandContext))
+	case ctx.HeadCommand() != nil:
+		return b.VisitHeadCommand(ctx.HeadCommand().(*generated.HeadCommandContext))
+	case ctx.DescribeCommand() != nil:
+		return b.VisitDescribeCommand(ctx.DescribeCommand().(*generated.DescribeCommandContext))
+	case ctx.ShowDatasourcesCommand() != nil:
+		return b.VisitShowDatasourcesCommand(ctx.ShowDatasourcesCommand().(*generated.ShowDatasourcesCommandContext))
+	case ctx.ExplainCommand() != nil:
+		return b.VisitExplainCommand(ctx.ExplainCommand().(*generated.ExplainCommandContext))
+	default:
+		return nil, fmt.Errorf("unknown command type")
+	}
+}
+
+// VisitSearchCommand builds a SearchCommand AST node
+func (b *ASTBuilder) VisitSearchCommand(ctx *generated.SearchCommandContext) (interface{}, error) {
+	if searchCtx, ok := ctx.(*generated.SearchWithSourceContext); ok {
+		// Get source name (last IDENTIFIER)
+		identifiers := searchCtx.AllIDENTIFIER()
+		if len(identifiers) < 2 {
+			return nil, fmt.Errorf("search command requires source parameter")
+		}
+		source := identifiers[len(identifiers)-1].GetText()
+
+		return &ast.SearchCommand{
+			BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+			Source:   source,
+		}, nil
+	}
+	return nil, fmt.Errorf("invalid search command")
+}
+
+// VisitWhereCommand builds a WhereCommand AST node
+func (b *ASTBuilder) VisitWhereCommand(ctx *generated.WhereCommandContext) (interface{}, error) {
+	expr, err := b.VisitExpression(ctx.Expression().(*generated.ExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.WhereCommand{
+		BaseNode:  ast.BaseNode{Pos: getPosition(ctx)},
+		Condition: expr.(ast.Expression),
+	}, nil
+}
+
+// VisitFieldsCommand builds a FieldsCommand AST node
+func (b *ASTBuilder) VisitFieldsCommand(ctx *generated.FieldsCommandContext) (interface{}, error) {
+	var fieldList *generated.FieldListContext
+	includes := true
+
+	switch fctx := ctx.(type) {
+	case *generated.FieldsIncludeContext:
+		fieldList = fctx.FieldList().(*generated.FieldListContext)
+		includes = true
+	case *generated.FieldsExcludeContext:
+		fieldList = fctx.FieldList().(*generated.FieldListContext)
+		includes = false
+	default:
+		return nil, fmt.Errorf("unknown fields command type")
+	}
+
+	fields := make([]ast.Expression, 0)
+	for _, exprCtx := range fieldList.AllExpression() {
+		expr, err := b.VisitExpression(exprCtx.(*generated.ExpressionContext))
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, expr.(ast.Expression))
+	}
+
+	return &ast.FieldsCommand{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+		Fields:   fields,
+		Includes: includes,
+	}, nil
+}
+
+// VisitStatsCommand builds a StatsCommand AST node
+func (b *ASTBuilder) VisitStatsCommand(ctx *generated.StatsCommandContext) (interface{}, error) {
+	// Parse aggregations
+	aggregations := make([]*ast.Aggregation, 0)
+	aggListCtx := ctx.AggregationList().(*generated.AggregationListContext)
+	for _, aggCtx := range aggListCtx.AllAggregation() {
+		agg, err := b.VisitAggregation(aggCtx.(*generated.AggregationContext))
+		if err != nil {
+			return nil, err
+		}
+		aggregations = append(aggregations, agg.(*ast.Aggregation))
+	}
+
+	// Parse group by fields (optional)
+	groupBy := make([]ast.Expression, 0)
+	if ctx.FieldList() != nil {
+		fieldListCtx := ctx.FieldList().(*generated.FieldListContext)
+		for _, exprCtx := range fieldListCtx.AllExpression() {
+			expr, err := b.VisitExpression(exprCtx.(*generated.ExpressionContext))
+			if err != nil {
+				return nil, err
+			}
+			groupBy = append(groupBy, expr.(ast.Expression))
+		}
+	}
+
+	return &ast.StatsCommand{
+		BaseNode:     ast.BaseNode{Pos: getPosition(ctx)},
+		Aggregations: aggregations,
+		GroupBy:      groupBy,
+	}, nil
+}
+
+// VisitAggregation builds an Aggregation AST node
+func (b *ASTBuilder) VisitAggregation(ctx *generated.AggregationContext) (interface{}, error) {
+	expr, err := b.VisitExpression(ctx.Expression(0).(*generated.ExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if it's a function call (required for aggregation)
+	funcCall, ok := expr.(*ast.FunctionCall)
+	if !ok {
+		return nil, fmt.Errorf("aggregation must be a function call")
+	}
+
+	// Get alias if present
+	alias := ""
+	if ctx.IDENTIFIER() != nil {
+		alias = ctx.IDENTIFIER().GetText()
+	}
+
+	return &ast.Aggregation{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+		Func:     funcCall,
+		Alias:    alias,
+	}, nil
+}
+
+// VisitSortCommand builds a SortCommand AST node
+func (b *ASTBuilder) VisitSortCommand(ctx *generated.SortCommandContext) (interface{}, error) {
+	sortKeys := make([]*ast.SortKey, 0)
+	sortFieldListCtx := ctx.SortFieldList().(*generated.SortFieldListContext)
+
+	for _, sortFieldCtx := range sortFieldListCtx.AllSortField() {
+		sortKey, err := b.VisitSortField(sortFieldCtx.(*generated.SortFieldContext))
+		if err != nil {
+			return nil, err
+		}
+		sortKeys = append(sortKeys, sortKey.(*ast.SortKey))
+	}
+
+	return &ast.SortCommand{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+		SortKeys: sortKeys,
+	}, nil
+}
+
+// VisitSortField builds a SortKey AST node
+func (b *ASTBuilder) VisitSortField(ctx *generated.SortFieldContext) (interface{}, error) {
+	expr, err := b.VisitExpression(ctx.Expression().(*generated.ExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	descending := false
+	if ctx.DESC() != nil {
+		descending = true
+	}
+
+	return &ast.SortKey{
+		BaseNode:   ast.BaseNode{Pos: getPosition(ctx)},
+		Field:      expr.(ast.Expression),
+		Descending: descending,
+	}, nil
+}
+
+// VisitHeadCommand builds a HeadCommand AST node
+func (b *ASTBuilder) VisitHeadCommand(ctx *generated.HeadCommandContext) (interface{}, error) {
+	countStr := ctx.INTEGER().GetText()
+	count, err := strconv.Atoi(countStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid head count: %s", countStr)
+	}
+
+	return &ast.HeadCommand{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+		Count:    count,
+	}, nil
+}
+
+// VisitDescribeCommand builds a DescribeCommand AST node
+func (b *ASTBuilder) VisitDescribeCommand(ctx *generated.DescribeCommandContext) (interface{}, error) {
+	source := ctx.IDENTIFIER().GetText()
+
+	return &ast.DescribeCommand{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+		Source:   source,
+	}, nil
+}
+
+// VisitShowDatasourcesCommand builds a ShowDatasourcesCommand AST node
+func (b *ASTBuilder) VisitShowDatasourcesCommand(ctx *generated.ShowDatasourcesCommandContext) (interface{}, error) {
+	return &ast.ShowDatasourcesCommand{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+	}, nil
+}
+
+// VisitExplainCommand builds an ExplainCommand AST node
+func (b *ASTBuilder) VisitExplainCommand(ctx *generated.ExplainCommandContext) (interface{}, error) {
+	return &ast.ExplainCommand{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+	}, nil
+}
+
+// VisitExpression builds an Expression AST node
+func (b *ASTBuilder) VisitExpression(ctx *generated.ExpressionContext) (interface{}, error) {
+	return b.VisitOrExpression(ctx.OrExpression().(*generated.OrExpressionContext))
+}
+
+// VisitOrExpression builds binary OR expressions
+func (b *ASTBuilder) VisitOrExpression(ctx *generated.OrExpressionContext) (interface{}, error) {
+	andExprs := ctx.AllAndExpression()
+	if len(andExprs) == 1 {
+		return b.VisitAndExpression(andExprs[0].(*generated.AndExpressionContext))
+	}
+
+	// Build left-associative OR chain
+	left, err := b.VisitAndExpression(andExprs[0].(*generated.AndExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 1; i < len(andExprs); i++ {
+		right, err := b.VisitAndExpression(andExprs[i].(*generated.AndExpressionContext))
+		if err != nil {
+			return nil, err
+		}
+
+		left = &ast.BinaryExpression{
+			BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+			Left:     left.(ast.Expression),
+			Operator: "OR",
+			Right:    right.(ast.Expression),
+		}
+	}
+
+	return left, nil
+}
+
+// VisitAndExpression builds binary AND expressions
+func (b *ASTBuilder) VisitAndExpression(ctx *generated.AndExpressionContext) (interface{}, error) {
+	notExprs := ctx.AllNotExpression()
+	if len(notExprs) == 1 {
+		return b.VisitNotExpression(notExprs[0].(*generated.NotExpressionContext))
+	}
+
+	// Build left-associative AND chain
+	left, err := b.VisitNotExpression(notExprs[0].(*generated.NotExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 1; i < len(notExprs); i++ {
+		right, err := b.VisitNotExpression(notExprs[i].(*generated.NotExpressionContext))
+		if err != nil {
+			return nil, err
+		}
+
+		left = &ast.BinaryExpression{
+			BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+			Left:     left.(ast.Expression),
+			Operator: "AND",
+			Right:    right.(ast.Expression),
+		}
+	}
+
+	return left, nil
+}
+
+// VisitNotExpression builds unary NOT expressions
+func (b *ASTBuilder) VisitNotExpression(ctx *generated.NotExpressionContext) (interface{}, error) {
+	if ctx.NOT() != nil {
+		operand, err := b.VisitNotExpression(ctx.NotExpression().(*generated.NotExpressionContext))
+		if err != nil {
+			return nil, err
+		}
+
+		return &ast.UnaryExpression{
+			BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+			Operator: "NOT",
+			Operand:  operand.(ast.Expression),
+		}, nil
+	}
+
+	return b.VisitComparisonExpression(ctx.ComparisonExpression().(*generated.ComparisonExpressionContext))
+}
+
+// VisitComparisonExpression builds comparison expressions
+func (b *ASTBuilder) VisitComparisonExpression(ctx *generated.ComparisonExpressionContext) (interface{}, error) {
+	left, err := b.VisitAdditiveExpression(ctx.AdditiveExpression(0).(*generated.AdditiveExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	// No comparison operator - just return left side
+	if ctx.AdditiveExpression(1) == nil && ctx.ExpressionList() == nil {
+		return left, nil
+	}
+
+	// Handle comparison operators
+	var operator string
+	switch {
+	case ctx.EQ() != nil:
+		operator = "="
+	case ctx.NEQ() != nil:
+		operator = "!="
+	case ctx.LT() != nil:
+		operator = "<"
+	case ctx.LTE() != nil:
+		operator = "<="
+	case ctx.GT() != nil:
+		operator = ">"
+	case ctx.GTE() != nil:
+		operator = ">="
+	case ctx.LIKE() != nil:
+		operator = "LIKE"
+	case ctx.IN() != nil:
+		operator = "IN"
+	}
+
+	if operator == "IN" {
+		// Handle IN operator with list
+		exprListCtx := ctx.ExpressionList().(*generated.ExpressionListContext)
+		values := make([]ast.Expression, 0)
+		for _, exprCtx := range exprListCtx.AllExpression() {
+			expr, err := b.VisitExpression(exprCtx.(*generated.ExpressionContext))
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, expr.(ast.Expression))
+		}
+
+		listLiteral := &ast.ListLiteral{
+			BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+			Values:   values,
+		}
+
+		return &ast.BinaryExpression{
+			BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+			Left:     left.(ast.Expression),
+			Operator: operator,
+			Right:    listLiteral,
+		}, nil
+	}
+
+	// Regular binary comparison
+	right, err := b.VisitAdditiveExpression(ctx.AdditiveExpression(1).(*generated.AdditiveExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.BinaryExpression{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+		Left:     left.(ast.Expression),
+		Operator: operator,
+		Right:    right.(ast.Expression),
+	}, nil
+}
+
+// VisitAdditiveExpression builds additive expressions (+ -)
+func (b *ASTBuilder) VisitAdditiveExpression(ctx *generated.AdditiveExpressionContext) (interface{}, error) {
+	multExprs := ctx.AllMultiplicativeExpression()
+	if len(multExprs) == 1 {
+		return b.VisitMultiplicativeExpression(multExprs[0].(*generated.MultiplicativeExpressionContext))
+	}
+
+	// Build left-associative chain
+	left, err := b.VisitMultiplicativeExpression(multExprs[0].(*generated.MultiplicativeExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 1; i < len(multExprs); i++ {
+		right, err := b.VisitMultiplicativeExpression(multExprs[i].(*generated.MultiplicativeExpressionContext))
+		if err != nil {
+			return nil, err
+		}
+
+		// Determine operator (PLUS or MINUS)
+		operator := "+"
+		if i-1 < len(ctx.AllMINUS()) && ctx.MINUS(i-1) != nil {
+			operator = "-"
+		}
+
+		left = &ast.BinaryExpression{
+			BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+			Left:     left.(ast.Expression),
+			Operator: operator,
+			Right:    right.(ast.Expression),
+		}
+	}
+
+	return left, nil
+}
+
+// VisitMultiplicativeExpression builds multiplicative expressions (* / %)
+func (b *ASTBuilder) VisitMultiplicativeExpression(ctx *generated.MultiplicativeExpressionContext) (interface{}, error) {
+	unaryExprs := ctx.AllUnaryExpression()
+	if len(unaryExprs) == 1 {
+		return b.VisitUnaryExpression(unaryExprs[0].(*generated.UnaryExpressionContext))
+	}
+
+	// Build left-associative chain
+	left, err := b.VisitUnaryExpression(unaryExprs[0].(*generated.UnaryExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 1; i < len(unaryExprs); i++ {
+		right, err := b.VisitUnaryExpression(unaryExprs[i].(*generated.UnaryExpressionContext))
+		if err != nil {
+			return nil, err
+		}
+
+		// Determine operator (STAR, SLASH, or PERCENT)
+		operator := "*"
+		if i-1 < len(ctx.AllSLASH()) && ctx.SLASH(i-1) != nil {
+			operator = "/"
+		} else if i-1 < len(ctx.AllPERCENT()) && ctx.PERCENT(i-1) != nil {
+			operator = "%"
+		}
+
+		left = &ast.BinaryExpression{
+			BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+			Left:     left.(ast.Expression),
+			Operator: operator,
+			Right:    right.(ast.Expression),
+		}
+	}
+
+	return left, nil
+}
+
+// VisitUnaryExpression builds unary expressions (+ -)
+func (b *ASTBuilder) VisitUnaryExpression(ctx *generated.UnaryExpressionContext) (interface{}, error) {
+	if ctx.PLUS() != nil || ctx.MINUS() != nil {
+		operator := "+"
+		if ctx.MINUS() != nil {
+			operator = "-"
+		}
+
+		operand, err := b.VisitUnaryExpression(ctx.UnaryExpression().(*generated.UnaryExpressionContext))
+		if err != nil {
+			return nil, err
+		}
+
+		return &ast.UnaryExpression{
+			BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+			Operator: operator,
+			Operand:  operand.(ast.Expression),
+		}, nil
+	}
+
+	return b.VisitPrimaryExpression(ctx.PrimaryExpression().(*generated.PrimaryExpressionContext))
+}
+
+// VisitPrimaryExpression builds primary expressions
+func (b *ASTBuilder) VisitPrimaryExpression(ctx *generated.PrimaryExpressionContext) (interface{}, error) {
+	switch {
+	case ctx.Literal() != nil:
+		return b.VisitLiteral(ctx.Literal().(*generated.LiteralContext))
+	case ctx.FieldReference() != nil:
+		return b.VisitFieldReference(ctx.FieldReference().(*generated.FieldReferenceContext))
+	case ctx.FunctionCall() != nil:
+		return b.VisitFunctionCall(ctx.FunctionCall().(*generated.FunctionCallContext))
+	case ctx.CaseExpression() != nil:
+		return b.VisitCaseExpression(ctx.CaseExpression().(*generated.CaseExpressionContext))
+	case ctx.Expression() != nil:
+		// Parenthesized expression
+		return b.VisitExpression(ctx.Expression().(*generated.ExpressionContext))
+	default:
+		return nil, fmt.Errorf("unknown primary expression type")
+	}
+}
+
+// VisitLiteral builds a Literal AST node
+func (b *ASTBuilder) VisitLiteral(ctx *generated.LiteralContext) (interface{}, error) {
+	pos := getPosition(ctx)
+
+	switch {
+	case ctx.INTEGER() != nil:
+		val, err := strconv.ParseInt(ctx.INTEGER().GetText(), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid integer: %s", ctx.INTEGER().GetText())
+		}
+		return &ast.Literal{
+			BaseNode:   ast.BaseNode{Pos: pos},
+			Value:      val,
+			LiteralTyp: ast.LiteralTypeInt,
+		}, nil
+
+	case ctx.DECIMAL() != nil:
+		val, err := strconv.ParseFloat(ctx.DECIMAL().GetText(), 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid decimal: %s", ctx.DECIMAL().GetText())
+		}
+		return &ast.Literal{
+			BaseNode:   ast.BaseNode{Pos: pos},
+			Value:      val,
+			LiteralTyp: ast.LiteralTypeFloat,
+		}, nil
+
+	case ctx.STRING() != nil:
+		// Remove quotes
+		str := ctx.STRING().GetText()
+		unquoted := strings.Trim(str, "'\"` ")
+		return &ast.Literal{
+			BaseNode:   ast.BaseNode{Pos: pos},
+			Value:      unquoted,
+			LiteralTyp: ast.LiteralTypeString,
+		}, nil
+
+	case ctx.TRUE() != nil:
+		return &ast.Literal{
+			BaseNode:   ast.BaseNode{Pos: pos},
+			Value:      true,
+			LiteralTyp: ast.LiteralTypeBool,
+		}, nil
+
+	case ctx.FALSE() != nil:
+		return &ast.Literal{
+			BaseNode:   ast.BaseNode{Pos: pos},
+			Value:      false,
+			LiteralTyp: ast.LiteralTypeBool,
+		}, nil
+
+	case ctx.NULL() != nil:
+		return &ast.Literal{
+			BaseNode:   ast.BaseNode{Pos: pos},
+			Value:      nil,
+			LiteralTyp: ast.LiteralTypeNull,
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unknown literal type")
+	}
+}
+
+// VisitFieldReference builds a FieldReference AST node
+func (b *ASTBuilder) VisitFieldReference(ctx *generated.FieldReferenceContext) (interface{}, error) {
+	// Build field name (may include dots for nested fields)
+	identifiers := ctx.AllIDENTIFIER()
+	parts := make([]string, len(identifiers))
+	for i, id := range identifiers {
+		parts[i] = id.GetText()
+	}
+	name := strings.Join(parts, ".")
+
+	// Handle array indexing if present
+	if ctx.INTEGER() != nil {
+		index := ctx.INTEGER().GetText()
+		name = fmt.Sprintf("%s[%s]", name, index)
+	}
+
+	return &ast.FieldReference{
+		BaseNode: ast.BaseNode{Pos: getPosition(ctx)},
+		Name:     name,
+	}, nil
+}
+
+// VisitFunctionCall builds a FunctionCall AST node
+func (b *ASTBuilder) VisitFunctionCall(ctx *generated.FunctionCallContext) (interface{}, error) {
+	var funcName string
+	var args []ast.Expression
+	var distinct bool
+
+	switch fctx := ctx.(type) {
+	case *generated.FunctionCallNoArgsContext:
+		funcName = fctx.IDENTIFIER().GetText()
+		args = make([]ast.Expression, 0)
+
+	case *generated.FunctionCallWithArgsContext:
+		funcName = fctx.IDENTIFIER().GetText()
+		distinct = fctx.DISTINCT() != nil
+
+		exprListCtx := fctx.ExpressionList().(*generated.ExpressionListContext)
+		args = make([]ast.Expression, 0)
+		for _, exprCtx := range exprListCtx.AllExpression() {
+			expr, err := b.VisitExpression(exprCtx.(*generated.ExpressionContext))
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, expr.(ast.Expression))
+		}
+
+	case *generated.AggregationFunctionCallContext:
+		funcName = fctx.AggregationFunction().GetText()
+		distinct = fctx.DISTINCT() != nil
+
+		if fctx.ExpressionList() != nil {
+			exprListCtx := fctx.ExpressionList().(*generated.ExpressionListContext)
+			args = make([]ast.Expression, 0)
+			for _, exprCtx := range exprListCtx.AllExpression() {
+				expr, err := b.VisitExpression(exprCtx.(*generated.ExpressionContext))
+				if err != nil {
+					return nil, err
+				}
+				args = append(args, expr.(ast.Expression))
+			}
+		} else {
+			args = make([]ast.Expression, 0)
+		}
+
+	default:
+		return nil, fmt.Errorf("unknown function call type")
+	}
+
+	return &ast.FunctionCall{
+		BaseNode:  ast.BaseNode{Pos: getPosition(ctx)},
+		Name:      funcName,
+		Arguments: args,
+		Distinct:  distinct,
+	}, nil
+}
+
+// VisitCaseExpression builds a CaseExpression AST node
+func (b *ASTBuilder) VisitCaseExpression(ctx *generated.CaseExpressionContext) (interface{}, error) {
+	whenClauses := make([]*ast.WhenClause, 0)
+	for _, whenCtx := range ctx.AllWhenClause() {
+		when, err := b.VisitWhenClause(whenCtx.(*generated.WhenClauseContext))
+		if err != nil {
+			return nil, err
+		}
+		whenClauses = append(whenClauses, when.(*ast.WhenClause))
+	}
+
+	var elseResult ast.Expression
+	if ctx.Expression() != nil {
+		expr, err := b.VisitExpression(ctx.Expression().(*generated.ExpressionContext))
+		if err != nil {
+			return nil, err
+		}
+		elseResult = expr.(ast.Expression)
+	}
+
+	return &ast.CaseExpression{
+		BaseNode:    ast.BaseNode{Pos: getPosition(ctx)},
+		WhenClauses: whenClauses,
+		ElseResult:  elseResult,
+	}, nil
+}
+
+// VisitWhenClause builds a WhenClause AST node
+func (b *ASTBuilder) VisitWhenClause(ctx *generated.WhenClauseContext) (interface{}, error) {
+	condition, err := b.VisitExpression(ctx.Expression(0).(*generated.ExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := b.VisitExpression(ctx.Expression(1).(*generated.ExpressionContext))
+	if err != nil {
+		return nil, err
+	}
+
+	return &ast.WhenClause{
+		BaseNode:  ast.BaseNode{Pos: getPosition(ctx)},
+		Condition: condition.(ast.Expression),
+		Result:    result.(ast.Expression),
+	}, nil
+}
