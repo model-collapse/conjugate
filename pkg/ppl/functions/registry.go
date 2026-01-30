@@ -49,6 +49,10 @@ func newBuiltinRegistry() *FunctionRegistry {
 	registry.registerConditionalFunctions()
 	registry.registerRelevanceFunctions()
 	registry.registerAggregationFunctions()
+	registry.registerCryptoFunctions()
+	registry.registerIPFunctions()
+	registry.registerJSONFunctions()
+	registry.registerSystemFunctions()
 
 	return registry
 }

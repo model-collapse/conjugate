@@ -14,10 +14,11 @@ import (
 // eventstatsOperator computes aggregations across all events and adds results to each row
 // Unlike stats which groups rows, eventstats enriches each event with aggregate values
 type eventstatsOperator struct {
-	input        Operator
-	groupBy      []ast.Expression
-	aggregations []*ast.Aggregation
-	logger       *zap.Logger
+	input          Operator
+	groupBy        []ast.Expression
+	aggregations   []*ast.Aggregation
+	bucketNullable bool // Allow null values in grouping (default: false)
+	logger         *zap.Logger
 
 	ctx      context.Context
 	stats    *IteratorStats
@@ -35,16 +36,18 @@ func NewEventstatsOperator(
 	input Operator,
 	groupBy []ast.Expression,
 	aggregations []*ast.Aggregation,
+	bucketNullable bool,
 	logger *zap.Logger,
 ) *eventstatsOperator {
 	return &eventstatsOperator{
-		input:        input,
-		groupBy:      groupBy,
-		aggregations: aggregations,
-		logger:       logger,
-		stats:        &IteratorStats{},
-		rows:         make([]*Row, 0),
-		aggResults:   make(map[string]map[string]interface{}),
+		input:          input,
+		groupBy:        groupBy,
+		aggregations:   aggregations,
+		bucketNullable: bucketNullable,
+		logger:         logger,
+		stats:          &IteratorStats{},
+		rows:           make([]*Row, 0),
+		aggResults:     make(map[string]map[string]interface{}),
 	}
 }
 
@@ -91,6 +94,17 @@ func (e *eventstatsOperator) computeAggregations(ctx context.Context) error {
 
 		// Determine group key for this row
 		groupKey := e.getGroupKey(row)
+
+		// If bucket_nullable is false and group key contains NULL, skip this row
+		// from aggregation (but still include in output)
+		hasNull := e.groupKeyHasNull(row)
+		if !e.bucketNullable && hasNull {
+			// Store row but don't include in aggregation
+			e.rows = append(e.rows, row)
+			rowGroups[row] = "" // Empty key indicates no aggregation
+			continue
+		}
+
 		groups[groupKey] = append(groups[groupKey], row)
 		rowGroups[row] = groupKey
 
@@ -163,6 +177,25 @@ func (e *eventstatsOperator) getGroupKey(row *Row) string {
 	}
 
 	return key
+}
+
+// groupKeyHasNull checks if any group by field has a null value
+func (e *eventstatsOperator) groupKeyHasNull(row *Row) bool {
+	if len(e.groupBy) == 0 {
+		return false
+	}
+
+	for _, expr := range e.groupBy {
+		switch ex := expr.(type) {
+		case *ast.FieldReference:
+			val, exists := row.Get(ex.Name)
+			if !exists || val == nil {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // computeAggregation computes an aggregation over a group of rows

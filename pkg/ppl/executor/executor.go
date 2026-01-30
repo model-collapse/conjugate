@@ -289,21 +289,21 @@ func (e *Executor) buildOperator(plan physical.PhysicalPlan) (Operator, error) {
 		if err != nil {
 			return nil, err
 		}
-		return NewEventstatsOperator(input, p.GroupBy, p.Aggregations, e.logger), nil
+		return NewEventstatsOperator(input, p.GroupBy, p.Aggregations, p.BucketNullable, e.logger), nil
 
 	case *physical.PhysicalStreamstats:
 		input, err := e.buildOperator(p.Input)
 		if err != nil {
 			return nil, err
 		}
-		return NewStreamstatsOperator(input, p.GroupBy, p.Aggregations, p.Window, e.logger), nil
+		return NewStreamstatsOperator(input, p.GroupBy, p.Aggregations, p.Window, p.Global, p.ResetBefore, p.ResetAfter, e.logger), nil
 
 	case *physical.PhysicalAddtotals:
 		input, err := e.buildOperator(p.Input)
 		if err != nil {
 			return nil, err
 		}
-		return NewAddtotalsOperator(input, p.Fields, p.LabelField, p.Label, p.FieldName, e.logger), nil
+		return NewAddtotalsOperator(input, p.Fields, p.Row, p.Col, p.LabelField, p.Label, p.FieldName, e.logger), nil
 
 	case *physical.PhysicalAddcoltotals:
 		input, err := e.buildOperator(p.Input)

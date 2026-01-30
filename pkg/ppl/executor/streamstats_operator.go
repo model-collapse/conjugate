@@ -18,8 +18,11 @@ type streamstatsOperator struct {
 	input        Operator
 	groupBy      []ast.Expression
 	aggregations []*ast.Aggregation
-	window       int  // Window size for rolling aggregations (0 = unbounded)
-	current      bool // Include current event in calculation
+	window       int         // Window size for rolling aggregations (0 = unbounded)
+	current      bool        // Include current event in calculation (default: true)
+	global       bool        // Compute stats globally, ignore grouping (default: false)
+	resetBefore  ast.Expression // Reset statistics before this condition
+	resetAfter   ast.Expression // Reset statistics after this condition
 	logger       *zap.Logger
 
 	ctx    context.Context
@@ -44,6 +47,9 @@ func NewStreamstatsOperator(
 	groupBy []ast.Expression,
 	aggregations []*ast.Aggregation,
 	window int,
+	global bool,
+	resetBefore ast.Expression,
+	resetAfter ast.Expression,
 	logger *zap.Logger,
 ) *streamstatsOperator {
 	return &streamstatsOperator{
@@ -52,6 +58,9 @@ func NewStreamstatsOperator(
 		aggregations: aggregations,
 		window:       window,
 		current:      true, // Default: include current event
+		global:       global,
+		resetBefore:  resetBefore,
+		resetAfter:   resetAfter,
 		logger:       logger,
 		stats:        &IteratorStats{},
 		groupStates:  make(map[string]*streamState),

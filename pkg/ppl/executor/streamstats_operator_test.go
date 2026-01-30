@@ -32,7 +32,7 @@ func TestStreamstatsOperator_RunningCount(t *testing.T) {
 			Alias: "running_count",
 		},
 	}
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestStreamstatsOperator_RunningSum(t *testing.T) {
 			Alias: "running_sum",
 		},
 	}
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -113,7 +113,7 @@ func TestStreamstatsOperator_RunningAverage(t *testing.T) {
 			Alias: "running_avg",
 		},
 	}
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestStreamstatsOperator_WindowedCount(t *testing.T) {
 		},
 	}
 	// Window size of 3
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 3, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 3, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -196,7 +196,7 @@ func TestStreamstatsOperator_WindowedSum(t *testing.T) {
 		},
 	}
 	// Window size of 3
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 3, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 3, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -238,7 +238,7 @@ func TestStreamstatsOperator_WindowedAverage(t *testing.T) {
 		},
 	}
 	// Window size of 2
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 2, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 2, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -283,7 +283,7 @@ func TestStreamstatsOperator_GroupBy(t *testing.T) {
 			Alias: "running_sum",
 		},
 	}
-	streamstatsOp := NewStreamstatsOperator(iter, groupBy, aggregations, 0, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, groupBy, aggregations, 0, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -349,7 +349,7 @@ func TestStreamstatsOperator_MultipleAggregations(t *testing.T) {
 			Alias: "running_count",
 		},
 	}
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -407,7 +407,7 @@ func TestStreamstatsOperator_RunningMinMax(t *testing.T) {
 			Alias: "running_max",
 		},
 	}
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -461,7 +461,7 @@ func TestStreamstatsOperator_PreservesOriginalFields(t *testing.T) {
 			Alias: "running_count",
 		},
 	}
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -513,7 +513,7 @@ func TestStreamstatsOperator_Stats(t *testing.T) {
 			Alias: "running_count",
 		},
 	}
-	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, logger)
+	streamstatsOp := NewStreamstatsOperator(iter, nil, aggregations, 0, false, nil, nil, logger)
 
 	err := streamstatsOp.Open(ctx)
 	require.NoError(t, err)

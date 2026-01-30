@@ -763,10 +763,19 @@ func (t *TableCommand) String() string {
 }
 
 // EventstatsCommand: eventstats <aggregations> [by <fields>]
+// EventstatsCommand: eventstats [bucket_nullable=<bool>] <aggregations> [by <fields>]
+// Computes aggregations across all events and adds results to each row
+// Unlike stats which groups rows, eventstats enriches each event with aggregate values
+//
+// Parameters:
+// - bucket_nullable (bool): Allow null values in group by fields (default: false)
+//   - false: Rows with null group keys are excluded from aggregation
+//   - true: Null group keys treated as valid groups
 type EventstatsCommand struct {
 	BaseNode
-	Aggregations []*Aggregation
-	GroupBy      []Expression
+	Aggregations    []*Aggregation
+	GroupBy         []Expression
+	BucketNullable  bool // Allow null values in grouping fields (default: false)
 }
 
 func (e *EventstatsCommand) Accept(visitor Visitor) (interface{}, error) {
@@ -792,13 +801,23 @@ func (e *EventstatsCommand) String() string {
 }
 
 // StreamstatsCommand: streamstats [options] <aggregations> [by <fields>]
+// Computes running statistics in a streaming fashion
+//
+// Parameters:
+// - window (int): Number of events in rolling window (0 = unbounded)
+// - current (bool): Include current event in calculation (default: true)
+// - global (bool): Compute stats globally, ignoring group by (default: false)
+// - reset_before (expr): Reset statistics before condition evaluates to true
+// - reset_after (expr): Reset statistics after condition evaluates to true
 type StreamstatsCommand struct {
 	BaseNode
 	Aggregations []*Aggregation
 	GroupBy      []Expression
-	Window       int  // Window size for rolling aggregations
-	Current      bool // Include current event
-	Global       bool // Global vs per-group
+	Window       int        // Window size for rolling aggregations (0 = unbounded)
+	Current      bool       // Include current event (default: true)
+	Global       bool       // Compute stats globally, ignore grouping (default: false)
+	ResetBefore  Expression // Reset statistics before this condition
+	ResetAfter   Expression // Reset statistics after this condition
 }
 
 func (s *StreamstatsCommand) Accept(visitor Visitor) (interface{}, error) {
@@ -860,15 +879,29 @@ func (f *FlattenCommand) String() string {
 	return fmt.Sprintf("flatten %s", f.Field.String())
 }
 
-// AddtotalsCommand: addtotals [<field1>, <field2>, ...] - Adds a row with totals for numeric fields
-// If no fields are specified, totals are computed for all numeric fields
-// The total row has field values aggregated (sum for numeric, "Total" label for grouping fields)
+// AddtotalsCommand: addtotals [row=<bool>] [col=<bool>] [<field1>, <field2>, ...]
+// Adds row and/or column totals for numeric fields per OpenSearch PPL specification
+//
+// Parameters:
+// - row (bool): Add row-wise totals as a new field (default: true)
+// - col (bool): Add a summary row with column totals (default: false)
+// - fields: Specific fields to total (if empty, total all numeric fields)
+// - labelField: Field to use for the "Total" label in summary row
+// - label: Custom label for the summary row (default: "Total")
+// - fieldName: Name of field for row totals when row=true (default: "total")
+//
+// Examples:
+//   addtotals                      # row=true, col=false (add row totals field)
+//   addtotals row=false col=true   # Add summary row with column totals
+//   addtotals row=true col=true    # Add both row totals field AND summary row
 type AddtotalsCommand struct {
 	BaseNode
+	Row         bool         // Add row totals as new field (default: true)
+	Col         bool         // Add column totals in summary row (default: false)
 	Fields      []Expression // Optional: specific fields to total (if empty, total all numeric fields)
 	LabelField  string       // Optional: field to use for the "Total" label (default: first group-by field)
 	Label       string       // Optional: custom label for the total row (default: "Total")
-	FieldName   string       // Optional: name of field for row labels (default: empty)
+	FieldName   string       // Optional: name of field for row labels (default: "total")
 }
 
 func (a *AddtotalsCommand) Accept(visitor Visitor) (interface{}, error) {
@@ -889,7 +922,15 @@ func (a *AddtotalsCommand) String() string {
 }
 
 // AddcoltotalsCommand: addcoltotals [<field1>, <field2>, ...] - Adds a column with totals for numeric fields
-// If no fields are specified, totals are computed for all numeric fields
+//
+// DEPRECATED: Use AddtotalsCommand with col=true instead for OpenSearch compatibility.
+// This command is maintained for backward compatibility but maps to addtotals with col=true.
+//
+// Migration:
+//   Old: addcoltotals field1, field2
+//   New: addtotals row=false col=true field1, field2
+//
+// If no fields are specified, totals are computed for all numeric fields.
 // The total column has field values aggregated (sum for numeric)
 type AddcoltotalsCommand struct {
 	BaseNode

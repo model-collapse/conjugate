@@ -32,7 +32,7 @@ func TestEventstatsOperator_SimpleCount(t *testing.T) {
 			Alias: "total",
 		},
 	}
-	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, logger)
+	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, false, logger)
 
 	err := eventstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -82,7 +82,7 @@ func TestEventstatsOperator_AvgWithGroupBy(t *testing.T) {
 			Alias: "avg_latency",
 		},
 	}
-	eventstatsOp := NewEventstatsOperator(iter, groupBy, aggregations, logger)
+	eventstatsOp := NewEventstatsOperator(iter, groupBy, aggregations, false, logger)
 
 	err := eventstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -158,7 +158,7 @@ func TestEventstatsOperator_MultipleAggregations(t *testing.T) {
 			Alias: "maximum",
 		},
 	}
-	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, logger)
+	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, false, logger)
 
 	err := eventstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestEventstatsOperator_CountByGroup(t *testing.T) {
 			Alias: "count",
 		},
 	}
-	eventstatsOp := NewEventstatsOperator(iter, groupBy, aggregations, logger)
+	eventstatsOp := NewEventstatsOperator(iter, groupBy, aggregations, false, logger)
 
 	err := eventstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -250,7 +250,7 @@ func TestEventstatsOperator_EmptyInput(t *testing.T) {
 			Alias: "total",
 		},
 	}
-	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, logger)
+	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, false, logger)
 
 	err := eventstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -287,7 +287,7 @@ func TestEventstatsOperator_PreservesOriginalFields(t *testing.T) {
 			Alias: "total",
 		},
 	}
-	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, logger)
+	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, false, logger)
 
 	err := eventstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -345,7 +345,7 @@ func TestEventstatsOperator_Stats(t *testing.T) {
 			Alias: "total",
 		},
 	}
-	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, logger)
+	eventstatsOp := NewEventstatsOperator(iter, nil, aggregations, false, logger)
 
 	err := eventstatsOp.Open(ctx)
 	require.NoError(t, err)
@@ -389,7 +389,7 @@ func TestEventstatsOperator_MultiFieldGroupBy(t *testing.T) {
 			Alias: "total",
 		},
 	}
-	eventstatsOp := NewEventstatsOperator(iter, groupBy, aggregations, logger)
+	eventstatsOp := NewEventstatsOperator(iter, groupBy, aggregations, false, logger)
 
 	err := eventstatsOp.Open(ctx)
 	require.NoError(t, err)

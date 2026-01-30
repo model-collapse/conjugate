@@ -517,10 +517,11 @@ func (p *PhysicalTable) String() string {
 
 // PhysicalEventstats computes running statistics across all events
 type PhysicalEventstats struct {
-	GroupBy      []ast.Expression
-	Aggregations []*ast.Aggregation
-	OutputSchema *analyzer.Schema
-	Input        PhysicalPlan
+	GroupBy        []ast.Expression
+	Aggregations   []*ast.Aggregation
+	BucketNullable bool // Allow null values in grouping (default: false)
+	OutputSchema   *analyzer.Schema
+	Input          PhysicalPlan
 }
 
 func (p *PhysicalEventstats) Schema() *analyzer.Schema    { return p.OutputSchema }
@@ -547,7 +548,10 @@ func (p *PhysicalEventstats) String() string {
 type PhysicalStreamstats struct {
 	GroupBy      []ast.Expression
 	Aggregations []*ast.Aggregation
-	Window       int
+	Window       int            // Window size for rolling aggregations
+	Global       bool           // Compute stats globally, ignore grouping
+	ResetBefore  ast.Expression // Reset statistics before condition
+	ResetAfter   ast.Expression // Reset statistics after condition
 	OutputSchema *analyzer.Schema
 	Input        PhysicalPlan
 }
@@ -721,9 +725,11 @@ func (p *PhysicalFlatten) String() string {
 type PhysicalAddtotals struct {
 	Input        PhysicalPlan
 	Fields       []ast.Expression // Specific fields to total (if empty, total all numeric)
-	LabelField   string           // Field to use for "Total" label
-	Label        string           // Label for the total row (default: "Total")
-	FieldName    string           // Name of field for row labels
+	Row          bool             // Add row totals as new field (default: true)
+	Col          bool             // Add column totals in summary row (default: false)
+	LabelField   string           // Field to use for "Total" label in summary row
+	Label        string           // Label for the summary row (default: "Total")
+	FieldName    string           // Name of field for row totals
 	OutputSchema *analyzer.Schema
 }
 
