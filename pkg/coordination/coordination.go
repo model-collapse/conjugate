@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/conjugate/conjugate/pkg/common/config"
 	"github.com/conjugate/conjugate/pkg/common/metrics"
@@ -49,8 +50,13 @@ type CoordinationNode struct {
 	pipelineExecutor *pipeline.Executor
 }
 
-// NewCoordinationNode creates a new coordination node
+// NewCoordinationNode creates a new coordination node with the default Prometheus registry
 func NewCoordinationNode(cfg *config.CoordinationConfig, logger *zap.Logger) (*CoordinationNode, error) {
+	return NewCoordinationNodeWithRegistry(cfg, logger, prometheus.DefaultRegisterer)
+}
+
+// NewCoordinationNodeWithRegistry creates a new coordination node with a custom Prometheus registry
+func NewCoordinationNodeWithRegistry(cfg *config.CoordinationConfig, logger *zap.Logger, registry prometheus.Registerer) (*CoordinationNode, error) {
 	if logger == nil {
 		return nil, fmt.Errorf("logger is required")
 	}
@@ -61,8 +67,8 @@ func NewCoordinationNode(cfg *config.CoordinationConfig, logger *zap.Logger) (*C
 	ginRouter.Use(gin.Recovery())
 	ginRouter.Use(ginLogger(logger))
 
-	// Create metrics collector
-	metricsCollector := metrics.NewMetricsCollector("coordination")
+	// Create metrics collector with custom registry
+	metricsCollector := metrics.NewMetricsCollectorWithRegistry("coordination", registry)
 	ginRouter.Use(metrics.HTTPMetricsMiddleware(metricsCollector))
 
 	// Create master client
@@ -1091,29 +1097,104 @@ func (c *CoordinationNode) handleBulk(ctx *gin.Context) {
 	c.logger.Debug("Processing bulk request",
 		zap.Int("num_operations", len(bulkReq.Operations)))
 
-	// Process operations in parallel with limited concurrency
 	response := bulk.NewBulkResponse()
 	results := make([]*bulkOperationResult, len(bulkReq.Operations))
-	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 100) // Increased from 10 to 100 for better throughput
 
-	for i, op := range bulkReq.Operations {
-		wg.Add(1)
-		go func(idx int, operation *bulk.BulkOperation) {
-			defer wg.Done()
-
-			// Acquire semaphore
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			// Execute operation
-			result := c.executeBulkOperation(ctx.Request.Context(), operation)
-			results[idx] = result
-		}(i, op)
+	// Separate index/create operations (batchable) from update/delete (individual)
+	type indexBatchEntry struct {
+		origIdx int
+		op      *bulk.BulkOperation
+	}
+	indexBatches := make(map[string][]indexBatchEntry) // indexName -> entries
+	var nonBatchOps []struct {
+		idx int
+		op  *bulk.BulkOperation
 	}
 
-	// Wait for all operations to complete
-	wg.Wait()
+	for i, op := range bulkReq.Operations {
+		switch op.Type {
+		case bulk.OperationIndex, bulk.OperationCreate:
+			indexBatches[op.Index] = append(indexBatches[op.Index], indexBatchEntry{origIdx: i, op: op})
+		default:
+			nonBatchOps = append(nonBatchOps, struct {
+				idx int
+				op  *bulk.BulkOperation
+			}{idx: i, op: op})
+		}
+	}
+
+	// Process index/create operations in batches (one BulkIndex RPC per shard)
+	for indexName, entries := range indexBatches {
+		docs := make([]router.BulkDocItem, len(entries))
+		for j, entry := range entries {
+			docs[j] = router.BulkDocItem{
+				DocID:    entry.op.ID,
+				Document: entry.op.Document,
+			}
+		}
+
+		bulkResults, err := c.docRouter.RouteBulkIndex(ctx.Request.Context(), indexName, docs)
+		if err != nil {
+			// Entire batch failed (e.g., routing error)
+			for _, entry := range entries {
+				results[entry.origIdx] = &bulkOperationResult{
+					itemResult: &bulk.BulkItemResult{
+						Index:  indexName,
+						ID:     entry.op.ID,
+						Status: http.StatusInternalServerError,
+						Error: &bulk.BulkItemError{
+							Type:   "index_failed_exception",
+							Reason: err.Error(),
+						},
+					},
+				}
+			}
+			continue
+		}
+
+		// Map bulk results back to original positions
+		for j, entry := range entries {
+			result := &bulkOperationResult{
+				itemResult: &bulk.BulkItemResult{
+					Index: indexName,
+					ID:    entry.op.ID,
+				},
+			}
+			if j < len(bulkResults) && bulkResults[j].Success {
+				result.itemResult.Status = http.StatusCreated
+				result.itemResult.Result = "created"
+				result.itemResult.Version = bulkResults[j].Version
+			} else {
+				errMsg := "unknown error"
+				if j < len(bulkResults) {
+					errMsg = bulkResults[j].Error
+				}
+				result.itemResult.Status = http.StatusInternalServerError
+				result.itemResult.Error = &bulk.BulkItemError{
+					Type:   "index_failed_exception",
+					Reason: errMsg,
+				}
+			}
+			results[entry.origIdx] = result
+		}
+	}
+
+	// Process non-batch operations (update, delete) individually
+	if len(nonBatchOps) > 0 {
+		var wg sync.WaitGroup
+		semaphore := make(chan struct{}, 100)
+		for _, entry := range nonBatchOps {
+			wg.Add(1)
+			go func(idx int, operation *bulk.BulkOperation) {
+				defer wg.Done()
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }()
+				result := c.executeBulkOperation(ctx.Request.Context(), operation)
+				results[idx] = result
+			}(entry.idx, entry.op)
+		}
+		wg.Wait()
+	}
 
 	// Build response maintaining order
 	for i, result := range results {

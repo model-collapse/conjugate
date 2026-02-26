@@ -154,7 +154,7 @@ func (s *DataService) FlushShard(ctx context.Context, req *pb.FlushShardRequest)
 
 // IndexDocument indexes a document into a shard
 func (s *DataService) IndexDocument(ctx context.Context, req *pb.IndexDocumentRequest) (*pb.IndexDocumentResponse, error) {
-	s.logger.Info("==> DataService.IndexDocument ENTRY",
+	s.logger.Debug("IndexDocument",
 		zap.String("index", req.IndexName),
 		zap.Int32("shard_id", req.ShardId),
 		zap.String("doc_id", req.DocId))
@@ -173,12 +173,7 @@ func (s *DataService) IndexDocument(ctx context.Context, req *pb.IndexDocumentRe
 		return nil, status.Error(codes.InvalidArgument, "document is required")
 	}
 
-	s.logger.Info("IndexDocument validation passed", zap.String("doc_id", req.DocId))
-
 	// Get shard
-	s.logger.Info("Getting shard",
-		zap.String("index", req.IndexName),
-		zap.Int32("shard_id", req.ShardId))
 	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
 	if err != nil {
 		s.logger.Error("Failed to get shard",
@@ -188,28 +183,16 @@ func (s *DataService) IndexDocument(ctx context.Context, req *pb.IndexDocumentRe
 		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
 	}
 
-	s.logger.Info("Got shard successfully", zap.String("doc_id", req.DocId))
-
 	// Convert protobuf Struct to map
 	doc := req.Document.AsMap()
-	s.logger.Info("Converted document to map",
-		zap.String("doc_id", req.DocId),
-		zap.Int("num_fields", len(doc)))
 
 	// Index document
-	s.logger.Info("Calling shard.IndexDocument", zap.String("doc_id", req.DocId))
 	if err := shard.IndexDocument(ctx, req.DocId, doc); err != nil {
 		s.logger.Error("shard.IndexDocument FAILED",
 			zap.String("doc_id", req.DocId),
 			zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "failed to index document: %v", err)
 	}
-
-	s.logger.Info("shard.IndexDocument SUCCESS", zap.String("doc_id", req.DocId))
-
-	s.logger.Info("Returning IndexDocumentResponse",
-		zap.String("doc_id", req.DocId),
-		zap.Int64("version", 1))
 
 	return &pb.IndexDocumentResponse{
 		Acknowledged: true,
@@ -300,7 +283,7 @@ func (s *DataService) DeleteDocument(ctx context.Context, req *pb.DeleteDocument
 	}, nil
 }
 
-// BulkIndex indexes multiple documents in a single request
+// BulkIndex indexes multiple documents in a single request using batch API
 func (s *DataService) BulkIndex(ctx context.Context, req *pb.BulkIndexRequest) (*pb.BulkIndexResponse, error) {
 	s.logger.Debug("BulkIndex request",
 		zap.String("index", req.IndexName),
@@ -322,44 +305,52 @@ func (s *DataService) BulkIndex(ctx context.Context, req *pb.BulkIndexRequest) (
 	}
 
 	startTime := time.Now()
-	hasErrors := false
-	items := make([]*pb.BulkIndexItemResponse, 0, len(req.Items))
 
-	// Index each document
-	for _, item := range req.Items {
-		doc := item.Document.AsMap()
-		err := shard.IndexDocument(ctx, item.DocId, doc)
+	// Convert protobuf items to the bulk format expected by shard
+	bulkDocs := make([]struct {
+		ID  string
+		Doc map[string]interface{}
+	}, len(req.Items))
 
+	for i, item := range req.Items {
+		bulkDocs[i].ID = item.DocId
+		bulkDocs[i].Doc = item.Document.AsMap()
+	}
+
+	// Use batch bulk index (single lock acquisition, single CGO batch)
+	_, err = shard.BulkIndexDocuments(ctx, bulkDocs)
+
+	// Build response items
+	items := make([]*pb.BulkIndexItemResponse, len(req.Items))
+	hasErrors := err != nil
+
+	for i, item := range req.Items {
 		itemResp := &pb.BulkIndexItemResponse{
 			DocId: item.DocId,
 		}
-
 		if err != nil {
-			hasErrors = true
 			itemResp.Acknowledged = false
 			itemResp.Error = err.Error()
 		} else {
 			itemResp.Acknowledged = true
 		}
-
-		items = append(items, itemResp)
+		items[i] = itemResp
 	}
 
 	tookMillis := time.Since(startTime).Milliseconds()
 
 	return &pb.BulkIndexResponse{
-		HasErrors:   hasErrors,
-		Items:       items,
-		TookMillis:  tookMillis,
+		HasErrors:  hasErrors,
+		Items:      items,
+		TookMillis: tookMillis,
 	}, nil
 }
 
 // Search executes a search query on a shard
 func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchResponse, error) {
-	s.logger.Info("==> DataService.Search ENTRY",
+	s.logger.Debug("Search",
 		zap.String("index", req.IndexName),
-		zap.Int32("shard_id", req.ShardId),
-		zap.String("query", string(req.Query)))
+		zap.Int32("shard_id", req.ShardId))
 
 	// Validate request
 	if req.IndexName == "" {
@@ -379,25 +370,10 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 
 	startTime := time.Now()
 
-	s.logger.Info("DEBUG: About to call shard.Search",
-		zap.String("index", req.IndexName),
-		zap.Int32("shard_id", req.ShardId))
-
 	// Execute search (UDF queries are embedded in req.Query JSON)
 	result, err := shard.Search(ctx, req.Query)
-
-	s.logger.Info("DEBUG: shard.Search returned",
-		zap.Bool("has_result", result != nil),
-		zap.Bool("has_error", err != nil))
-
-	if result != nil {
-		s.logger.Info("DEBUG: Search result details",
-			zap.Int64("total_hits", result.TotalHits),
-			zap.Int("num_hits", len(result.Hits)))
-	}
-
 	if err != nil {
-		s.logger.Error("DEBUG: Search error", zap.Error(err))
+		s.logger.Error("Search failed", zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "search failed: %v", err)
 	}
 
@@ -497,6 +473,8 @@ func (s *DataService) GetShardStats(ctx context.Context, req *pb.GetShardStatsRe
 		SearchQueriesTimeMillis: 0,
 		IndexingTotal:           0, // TODO: Track indexing metrics
 		IndexingTimeMillis:      0,
+		SegmentCount:            stats.SegmentCount,
+		MaxDoc:                  stats.MaxDoc,
 	}, nil
 }
 
@@ -692,4 +670,65 @@ func convertBuckets(buckets []map[string]interface{}) []*pb.AggregationBucket {
 	}
 
 	return result
+}
+
+// ForceMerge optimizes a shard by merging segments
+func (s *DataService) ForceMerge(ctx context.Context, req *pb.ForceMergeRequest) (*pb.ForceMergeResponse, error) {
+	s.logger.Info("ForceMerge request",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId),
+		zap.Int32("max_segments", req.MaxSegments))
+
+	// Validate request
+	if req.IndexName == "" {
+		return nil, status.Error(codes.InvalidArgument, "index name is required")
+	}
+	if req.MaxSegments <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "max_segments must be positive")
+	}
+
+	// Get shard
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
+	}
+
+	// Get stats before merge
+	statsBefore := shard.Stats()
+	segmentsBefore := statsBefore.SegmentCount
+
+	// Flush if requested
+	if req.Flush {
+		if err := shard.Flush(ctx); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to flush before merge: %v", err)
+		}
+	}
+
+	// Track duration
+	startTime := time.Now()
+
+	// Perform force merge
+	if err := shard.ForceMerge(int(req.MaxSegments)); err != nil {
+		return nil, status.Errorf(codes.Internal, "force merge failed: %v", err)
+	}
+
+	duration := time.Since(startTime)
+
+	// Get stats after merge
+	statsAfter := shard.Stats()
+	segmentsAfter := statsAfter.SegmentCount
+
+	s.logger.Info("Force merge completed",
+		zap.String("index", req.IndexName),
+		zap.Int32("shard_id", req.ShardId),
+		zap.Int32("segments_before", segmentsBefore),
+		zap.Int32("segments_after", segmentsAfter),
+		zap.Int64("duration_ms", duration.Milliseconds()))
+
+	return &pb.ForceMergeResponse{
+		Acknowledged:    true,
+		SegmentsBefore:  segmentsBefore,
+		SegmentsAfter:   segmentsAfter,
+		DurationMillis:  duration.Milliseconds(),
+	}, nil
 }

@@ -177,6 +177,30 @@ func (dc *DataNodeClient) IndexDocument(ctx context.Context, indexName string, s
 	return resp, nil
 }
 
+// BulkIndex indexes multiple documents on a specific shard in a single RPC call
+func (dc *DataNodeClient) BulkIndex(ctx context.Context, indexName string, shardID int32, items []*pb.BulkIndexItem) (*pb.BulkIndexResponse, error) {
+	dc.mu.RLock()
+	if !dc.connected {
+		dc.mu.RUnlock()
+		return nil, fmt.Errorf("not connected to data node %s", dc.nodeID)
+	}
+	client := dc.client
+	dc.mu.RUnlock()
+
+	req := &pb.BulkIndexRequest{
+		IndexName: indexName,
+		ShardId:   shardID,
+		Items:     items,
+	}
+
+	resp, err := client.BulkIndex(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("bulk index failed on node %s shard %d: %w", dc.nodeID, shardID, err)
+	}
+
+	return resp, nil
+}
+
 // GetDocument retrieves a document by ID from a specific shard
 func (dc *DataNodeClient) GetDocument(ctx context.Context, indexName string, shardID int32, docID string) (*pb.GetDocumentResponse, error) {
 	dc.mu.RLock()

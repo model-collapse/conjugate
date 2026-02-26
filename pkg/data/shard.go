@@ -118,9 +118,9 @@ func (sm *ShardManager) CreateShard(ctx context.Context, indexName string, shard
 		pendingDocs:      0,
 		lastCommitTime:   time.Now(),
 		lastRefreshTime:  time.Now(),
-		commitBatchSize:  1000,               // Default: commit every 1000 docs
-		commitInterval:   1 * time.Second,    // Default: commit every 1 second
-		refreshInterval:  1 * time.Second,    // Default: refresh every 1 second
+		commitBatchSize:  10000,              // Default: commit every 10000 docs
+		commitInterval:   5 * time.Second,    // Default: commit every 5 seconds
+		refreshInterval:  5 * time.Second,    // Default: refresh every 5 seconds
 		stopCommitter:    make(chan struct{}),
 		stopRefresher:    make(chan struct{}),
 		needsCommit:      false,
@@ -310,9 +310,9 @@ func (sm *ShardManager) loadShards() error {
 				pendingDocs:      0,
 				lastCommitTime:   time.Now(),
 				lastRefreshTime:  time.Now(),
-				commitBatchSize:  1000,               // Default: commit every 1000 docs
-				commitInterval:   1 * time.Second,    // Default: commit every 1 second
-				refreshInterval:  1 * time.Second,    // Default: refresh every 1 second
+				commitBatchSize:  10000,              // Default: commit every 10000 docs
+				commitInterval:   5 * time.Second,    // Default: commit every 5 seconds
+				refreshInterval:  5 * time.Second,    // Default: refresh every 5 seconds
 				stopCommitter:    make(chan struct{}),
 				stopRefresher:    make(chan struct{}),
 				needsCommit:      false,
@@ -455,6 +455,49 @@ func (s *Shard) IndexDocument(ctx context.Context, docID string, doc map[string]
 	return nil
 }
 
+// BulkIndexDocuments indexes multiple documents in a single batch operation.
+// This is significantly faster than calling IndexDocument repeatedly because it
+// reduces CGO overhead and lock contention.
+func (s *Shard) BulkIndexDocuments(ctx context.Context, docs []struct {
+	ID  string
+	Doc map[string]interface{}
+}) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.State != ShardStateStarted {
+		return 0, fmt.Errorf("shard is not ready")
+	}
+
+	s.logger.Debug("Bulk indexing documents",
+		zap.String("index", s.IndexName),
+		zap.Int32("shard_id", s.ShardID),
+		zap.Int("count", len(docs)))
+
+	// Index all documents via Diagon's bulk API
+	if err := s.DiagonShard.BulkIndexDocuments(docs); err != nil {
+		s.logger.Error("Bulk index failed", zap.Error(err))
+		return 0, fmt.Errorf("bulk index failed: %w", err)
+	}
+
+	count := len(docs)
+	s.pendingDocs += count
+	s.DocsCount += int64(count)
+	s.needsCommit = true
+
+	// Commit if batch threshold reached
+	shouldCommit := s.pendingDocs >= s.commitBatchSize ||
+		time.Since(s.lastCommitTime) >= s.commitInterval
+
+	if shouldCommit {
+		if err := s.commitBatch(); err != nil {
+			return count, err
+		}
+	}
+
+	return count, nil
+}
+
 // startBackgroundCommitter starts a goroutine that periodically commits pending changes
 func (s *Shard) startBackgroundCommitter() {
 	s.commitTicker = time.NewTicker(s.commitInterval)
@@ -541,7 +584,7 @@ func (s *Shard) commitBatch() error {
 	s.needsCommit = false
 	s.needsRefresh = true // Mark that refresh is needed
 
-	s.logger.Info("Batch committed to disk",
+	s.logger.Debug("Batch committed to disk",
 		zap.Int("docs", pendingCount),
 		zap.Duration("duration", duration),
 		zap.Int64("total_docs", s.DocsCount))
@@ -568,7 +611,7 @@ func (s *Shard) refreshReader() error {
 	s.lastRefreshTime = time.Now()
 	s.needsRefresh = false
 
-	s.logger.Info("Reader refreshed",
+	s.logger.Debug("Reader refreshed",
 		zap.Duration("duration", duration),
 		zap.Duration("since_last_commit", time.Since(s.lastCommitTime)))
 
@@ -616,16 +659,14 @@ func (s *Shard) SetBatchConfig(batchSize int, commitInterval, refreshInterval ti
 	s.commitInterval = commitInterval
 	s.refreshInterval = refreshInterval
 
-	// Restart commit ticker with new interval
+	// Reset commit ticker with new interval (Reset reuses the same channel)
 	if s.commitTicker != nil {
-		s.commitTicker.Stop()
-		s.commitTicker = time.NewTicker(commitInterval)
+		s.commitTicker.Reset(commitInterval)
 	}
 
-	// Restart refresh ticker with new interval
+	// Reset refresh ticker with new interval (Reset reuses the same channel)
 	if s.refreshTicker != nil {
-		s.refreshTicker.Stop()
-		s.refreshTicker = time.NewTicker(refreshInterval)
+		s.refreshTicker.Reset(refreshInterval)
 	}
 
 	s.logger.Info("Batch configuration updated",
@@ -841,22 +882,69 @@ func (s *Shard) Stats() *ShardStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return &ShardStats{
-		IndexName: s.IndexName,
-		ShardID:   s.ShardID,
-		IsPrimary: s.IsPrimary,
-		State:     s.State,
-		DocsCount: s.DocsCount,
-		SizeBytes: s.SizeBytes,
+	stats := &ShardStats{
+		IndexName:    s.IndexName,
+		ShardID:      s.ShardID,
+		IsPrimary:    s.IsPrimary,
+		State:        s.State,
+		DocsCount:    s.DocsCount,
+		SizeBytes:    s.SizeBytes,
+		SegmentCount: 0,
+		MaxDoc:       0,
 	}
+
+	// Get live Diagon stats if shard is available
+	if s.DiagonShard != nil {
+		diagonStats, err := s.DiagonShard.GetStats()
+		if err == nil {
+			stats.DocsCount = diagonStats.NumDocs
+			stats.SizeBytes = diagonStats.SizeBytes
+			stats.SegmentCount = int32(diagonStats.SegmentCount)
+			stats.MaxDoc = diagonStats.MaxDoc
+		}
+	}
+
+	return stats
 }
 
 // ShardStats represents shard statistics
 type ShardStats struct {
-	IndexName string
-	ShardID   int32
-	IsPrimary bool
-	State     ShardState
-	DocsCount int64
-	SizeBytes int64
+	IndexName    string
+	ShardID      int32
+	IsPrimary    bool
+	State        ShardState
+	DocsCount    int64
+	SizeBytes    int64
+	SegmentCount int32 // Number of Lucene segments
+	MaxDoc       int64 // Maximum document ID
+}
+
+// ForceMerge optimizes the shard by merging segments
+func (s *Shard) ForceMerge(maxSegments int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.DiagonShard == nil {
+		return fmt.Errorf("shard not initialized")
+	}
+
+	s.logger.Info("Starting force merge on shard",
+		zap.String("index", s.IndexName),
+		zap.Int32("shard_id", s.ShardID),
+		zap.Int("max_segments", maxSegments))
+
+	// Call Diagon force merge
+	if err := s.DiagonShard.ForceMerge(maxSegments); err != nil {
+		s.logger.Error("Force merge failed",
+			zap.String("index", s.IndexName),
+			zap.Int32("shard_id", s.ShardID),
+			zap.Error(err))
+		return fmt.Errorf("force merge failed: %w", err)
+	}
+
+	s.logger.Info("Force merge completed successfully",
+		zap.String("index", s.IndexName),
+		zap.Int32("shard_id", s.ShardID))
+
+	return nil
 }

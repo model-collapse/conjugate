@@ -56,9 +56,9 @@ func TestBatchIndexing_SeparateIntervals(t *testing.T) {
 
 	t.Run("DefaultConfiguration", func(t *testing.T) {
 		stats := shard.GetBatchStats()
-		assert.Equal(t, int64(1000), stats["commit_batch_size"])
-		assert.Equal(t, int64(1000), stats["commit_interval_ms"])
-		assert.Equal(t, int64(1000), stats["refresh_interval_ms"])
+		assert.Equal(t, 10000, stats["commit_batch_size"])
+		assert.Equal(t, int64(5000), stats["commit_interval_ms"])
+		assert.Equal(t, int64(5000), stats["refresh_interval_ms"])
 	})
 
 	t.Run("ConfigureSeparateIntervals", func(t *testing.T) {
@@ -66,7 +66,7 @@ func TestBatchIndexing_SeparateIntervals(t *testing.T) {
 		shard.SetBatchConfig(500, 200*time.Millisecond, 1*time.Second)
 
 		stats := shard.GetBatchStats()
-		assert.Equal(t, int64(500), stats["commit_batch_size"])
+		assert.Equal(t, 500, stats["commit_batch_size"])
 		assert.Equal(t, int64(200), stats["commit_interval_ms"])
 		assert.Equal(t, int64(1000), stats["refresh_interval_ms"])
 	})
@@ -91,7 +91,7 @@ func TestBatchIndexing_SeparateIntervals(t *testing.T) {
 
 		stats := shard.GetBatchStats()
 		// Commit should have happened (pending_docs = 0)
-		assert.Equal(t, int64(0), stats["pending_docs"])
+		assert.Equal(t, 0, stats["pending_docs"])
 		assert.False(t, stats["needs_commit"].(bool))
 
 		// But refresh should be pending
@@ -130,7 +130,7 @@ func TestBatchIndexing_SeparateIntervals(t *testing.T) {
 
 		// Check both cleared
 		stats = shard.GetBatchStats()
-		assert.Equal(t, int64(0), stats["pending_docs"])
+		assert.Equal(t, 0, stats["pending_docs"])
 		assert.False(t, stats["needs_commit"].(bool))
 		assert.False(t, stats["needs_refresh"].(bool))
 	})
@@ -140,7 +140,7 @@ func TestBatchIndexing_SeparateIntervals(t *testing.T) {
 		shard.SetBatchConfig(5000, 1*time.Second, 5*time.Second)
 
 		stats := shard.GetBatchStats()
-		assert.Equal(t, int64(5000), stats["commit_batch_size"])
+		assert.Equal(t, 5000, stats["commit_batch_size"])
 		assert.Equal(t, int64(1000), stats["commit_interval_ms"])
 		assert.Equal(t, int64(5000), stats["refresh_interval_ms"])
 	})
@@ -150,7 +150,7 @@ func TestBatchIndexing_SeparateIntervals(t *testing.T) {
 		shard.SetBatchConfig(100, 100*time.Millisecond, 100*time.Millisecond)
 
 		stats := shard.GetBatchStats()
-		assert.Equal(t, int64(100), stats["commit_batch_size"])
+		assert.Equal(t, 100, stats["commit_batch_size"])
 		assert.Equal(t, int64(100), stats["commit_interval_ms"])
 		assert.Equal(t, int64(100), stats["refresh_interval_ms"])
 	})
@@ -211,7 +211,7 @@ func TestBatchIndexing_BackgroundWorkers(t *testing.T) {
 
 		// Should be committed now
 		stats = shard.GetBatchStats()
-		assert.Equal(t, int64(0), stats["pending_docs"])
+		assert.Equal(t, 0, stats["pending_docs"])
 		assert.False(t, stats["needs_commit"].(bool))
 		assert.True(t, stats["needs_refresh"].(bool)) // But not refreshed yet
 	})
