@@ -100,9 +100,9 @@ func TestDoubleRangeQuery(t *testing.T) {
 
 	t.Run("VerifyDocumentsSearchable", func(t *testing.T) {
 		// First verify that documents are searchable at all
-		// Search for "Laptop" in name field
+		// Search for "laptop" in name field (standard analyzer lowercases during indexing)
 		queryJSON := `{
-			"term": {"name": "Laptop"}
+			"term": {"name": "laptop"}
 		}`
 
 		results, err := shard.Search([]byte(queryJSON), nil)

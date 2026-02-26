@@ -1,8 +1,8 @@
 package diagon
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/upstream/src/core/include
-#cgo LDFLAGS: -L${SRCDIR}/build -ldiagon -L${SRCDIR}/upstream/build/src/core -ldiagon_core -lz -lzstd -llz4 -Wl,-rpath,${SRCDIR}/build -Wl,-rpath,${SRCDIR}/upstream/build/src/core
+#cgo CFLAGS: -I${SRCDIR}/../../../src/3rdparty/diagon/src/core/include
+#cgo LDFLAGS: -L${SRCDIR}/build -ldiagon -L${SRCDIR}/../../../src/3rdparty/diagon/build/src/core -ldiagon_core -lz -lzstd -llz4 -Wl,-rpath,${SRCDIR}/build -Wl,-rpath,${SRCDIR}/../../../src/3rdparty/diagon/build/src/core
 #include <stdlib.h>
 #include "diagon/c_api/diagon_c_api.h"
 */
@@ -284,6 +284,117 @@ func (s *Shard) IndexDocument(docID string, doc map[string]interface{}) error {
 	return nil
 }
 
+
+// BulkIndexDocuments indexes multiple documents in a batch to reduce CGO overhead.
+// This is significantly faster than calling IndexDocument repeatedly.
+func (s *Shard) BulkIndexDocuments(docs []struct {
+	ID  string
+	Doc map[string]interface{}
+}) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.logger.Info("==> DiagonBridge.BulkIndexDocuments ENTRY",
+		zap.Int("num_docs", len(docs)))
+
+	// Helper function to create a Diagon document from Go map
+	createDiagonDoc := func(docID string, doc map[string]interface{}) C.DiagonDocument {
+		diagonDoc := C.diagon_create_document()
+
+		// Add ID field - both indexed (for searching) and stored (for retrieval)
+		cDocID := C.CString(docID)
+		defer C.free(unsafe.Pointer(cDocID))
+		cIDFieldName := C.CString("_id")
+		defer C.free(unsafe.Pointer(cIDFieldName))
+
+		// Add as StringField for exact-match searching
+		idField := C.diagon_create_string_field(cIDFieldName, cDocID)
+		C.diagon_document_add_field(diagonDoc, idField)
+
+		// Add as StoredField for retrieval
+		storedIDField := C.diagon_create_stored_field(cIDFieldName, cDocID)
+		C.diagon_document_add_field(diagonDoc, storedIDField)
+
+		// Add other fields
+		for key, value := range doc {
+			cFieldName := C.CString(key)
+			defer C.free(unsafe.Pointer(cFieldName))
+
+			switch v := value.(type) {
+			case string:
+				cValue := C.CString(v)
+				defer C.free(unsafe.Pointer(cValue))
+				field := C.diagon_create_text_field(cFieldName, cValue)
+				C.diagon_document_add_field(diagonDoc, field)
+
+			case int, int32, int64:
+				val := int64(0)
+				switch n := v.(type) {
+				case int:
+					val = int64(n)
+				case int32:
+					val = int64(n)
+				case int64:
+					val = n
+				}
+				field := C.diagon_create_indexed_long_field(cFieldName, C.int64_t(val))
+				C.diagon_document_add_field(diagonDoc, field)
+
+				cValueStr := C.CString(fmt.Sprintf("%d", val))
+				defer C.free(unsafe.Pointer(cValueStr))
+				storedField := C.diagon_create_stored_field(cFieldName, cValueStr)
+				C.diagon_document_add_field(diagonDoc, storedField)
+
+			case float32, float64:
+				val := float64(0)
+				switch f := v.(type) {
+				case float32:
+					val = float64(f)
+				case float64:
+					val = f
+				}
+				field := C.diagon_create_indexed_double_field(cFieldName, C.double(val))
+				C.diagon_document_add_field(diagonDoc, field)
+
+				cValueStr := C.CString(fmt.Sprintf("%f", val))
+				defer C.free(unsafe.Pointer(cValueStr))
+				storedField := C.diagon_create_stored_field(cFieldName, cValueStr)
+				C.diagon_document_add_field(diagonDoc, storedField)
+
+			default:
+				// Convert to JSON string for complex types
+				jsonBytes, err := json.Marshal(v)
+				if err != nil {
+					continue
+				}
+				cValue := C.CString(string(jsonBytes))
+				defer C.free(unsafe.Pointer(cValue))
+				field := C.diagon_create_stored_field(cFieldName, cValue)
+				C.diagon_document_add_field(diagonDoc, field)
+			}
+		}
+
+		return diagonDoc
+	}
+
+	// Index all documents in batch
+	for i, item := range docs {
+		diagonDoc := createDiagonDoc(item.ID, item.Doc)
+		defer C.diagon_free_document(diagonDoc)
+
+		result := C.diagon_add_document(s.writer, diagonDoc)
+		if !result {
+			errMsg := C.GoString(C.diagon_last_error())
+			return fmt.Errorf("failed to add document %d (ID: %s): %s", i, item.ID, errMsg)
+		}
+	}
+
+	s.logger.Info("Bulk indexed documents to IndexWriter RAM buffer",
+		zap.Int("count", len(docs)))
+
+	return nil
+}
+
 // Commit commits all pending changes
 func (s *Shard) Commit() error {
 	s.mu.Lock()
@@ -483,15 +594,18 @@ func (s *Shard) convertQueryToDiagon(queryObj map[string]interface{}) (C.DiagonQ
 			cField := C.CString(field)
 			defer C.free(unsafe.Pointer(cField))
 
-			s.logger.Info("DEBUG: Creating Diagon numeric range query",
+			s.logger.Info("DEBUG: Creating Diagon double range query",
 				zap.String("field", field),
 				zap.Float64("lower", lowerValue),
 				zap.Float64("upper", upperValue),
 				zap.Bool("include_lower", includeLower),
 				zap.Bool("include_upper", includeUpper))
 
-			// Use unified numeric range query (auto-detects LONG vs DOUBLE)
-			diagonQuery = C.diagon_create_numeric_range_query(
+			// Use double range query for correct comparison semantics.
+			// diagon_create_numeric_range_query uses bit_cast<int64_t>(double)
+			// which breaks for negative doubles (bit patterns don't sort as integers).
+			// diagon_create_double_range_query compares doubles directly.
+			rangeQ := C.diagon_create_double_range_query(
 				cField,
 				C.double(lowerValue),
 				C.double(upperValue),
@@ -499,12 +613,37 @@ func (s *Shard) convertQueryToDiagon(queryObj map[string]interface{}) (C.DiagonQ
 				C.bool(includeUpper),
 			)
 
+			if rangeQ == nil {
+				errMsg := C.GoString(C.diagon_last_error())
+				s.logger.Error("DEBUG: Failed to create Diagon double range query", zap.String("error", errMsg))
+				return nil, fmt.Errorf("failed to create double range query: %s", errMsg)
+			}
+
+			// Wrap range query in bool(must: match_all, filter: range) to exclude
+			// phantom documents. Diagon's doc values iteration returns default 0.0
+			// for documents without the field, causing false matches when the range
+			// includes 0.0. match_all restricts results to real documents only.
+			matchAllQ := C.diagon_create_match_all_query()
+			if matchAllQ == nil {
+				errMsg := C.GoString(C.diagon_last_error())
+				return nil, fmt.Errorf("failed to create match_all for range wrapper: %s", errMsg)
+			}
+
+			boolBuilder := C.diagon_create_bool_query()
+			if boolBuilder == nil {
+				errMsg := C.GoString(C.diagon_last_error())
+				return nil, fmt.Errorf("failed to create bool query for range wrapper: %s", errMsg)
+			}
+
+			C.diagon_bool_query_add_must(boolBuilder, matchAllQ)
+			C.diagon_bool_query_add_filter(boolBuilder, rangeQ)
+
+			diagonQuery = C.diagon_bool_query_build(boolBuilder)
 			if diagonQuery == nil {
 				errMsg := C.GoString(C.diagon_last_error())
-				s.logger.Error("DEBUG: Failed to create Diagon numeric range query", zap.String("error", errMsg))
-				return nil, fmt.Errorf("failed to create numeric range query: %s", errMsg)
+				return nil, fmt.Errorf("failed to build range wrapper bool query: %s", errMsg)
 			}
-			s.logger.Info("DEBUG: Diagon numeric range query created successfully")
+			s.logger.Info("DEBUG: Diagon double range query created successfully (wrapped with match_all)")
 			break // Only support single field for now
 		}
 	} else if boolQuery, ok := queryObj["bool"].(map[string]interface{}); ok {
@@ -1040,6 +1179,67 @@ func (s *Shard) DeleteDocument(docID string) error {
 	// TODO: Implement when document deletion is available in Diagon
 	s.logger.Warn("Document deletion not yet implemented in Diagon Phase 4", zap.String("doc_id", docID))
 	return fmt.Errorf("document deletion not yet implemented in Diagon Phase 4")
+}
+
+// ForceMerge optimizes the index by merging segments
+func (s *Shard) ForceMerge(maxSegments int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.writer == nil {
+		return fmt.Errorf("writer not initialized")
+	}
+
+	s.logger.Info("Starting force merge", zap.Int("max_segments", maxSegments))
+
+	if !C.diagon_force_merge(s.writer, C.int(maxSegments)) {
+		errMsg := C.GoString(C.diagon_last_error())
+		return fmt.Errorf("force merge failed: %s", errMsg)
+	}
+
+	s.logger.Info("Force merge completed", zap.Int("max_segments", maxSegments))
+	return nil
+}
+
+// ShardStats contains statistics about the shard
+type ShardStats struct {
+	NumDocs      int64 `json:"num_docs"`       // Number of documents
+	MaxDoc       int64 `json:"max_doc"`        // Maximum document ID
+	SegmentCount int   `json:"segment_count"`  // Number of segments
+	SizeBytes    int64 `json:"size_bytes"`     // Index size in bytes
+}
+
+// GetStats returns statistics about the shard
+func (s *Shard) GetStats() (*ShardStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.directory == nil {
+		return nil, fmt.Errorf("directory not initialized")
+	}
+
+	// Open a fresh reader to get current stats
+	reader := C.diagon_open_index_reader(s.directory)
+	if reader == nil {
+		errMsg := C.GoString(C.diagon_last_error())
+		return nil, fmt.Errorf("failed to open reader for stats: %s", errMsg)
+	}
+	defer C.diagon_close_index_reader(reader)
+
+	stats := &ShardStats{
+		NumDocs:      int64(C.diagon_reader_num_docs(reader)),
+		MaxDoc:       int64(C.diagon_reader_max_doc(reader)),
+		SegmentCount: int(C.diagon_reader_get_segment_count(reader)),
+		SizeBytes:    int64(C.diagon_directory_get_size(s.directory)),
+	}
+
+	s.logger.Debug("Retrieved shard stats",
+		zap.Int64("num_docs", stats.NumDocs),
+		zap.Int64("max_doc", stats.MaxDoc),
+		zap.Int("segment_count", stats.SegmentCount),
+		zap.Int64("size_bytes", stats.SizeBytes))
+
+	return stats, nil
 }
 
 // Close closes the shard and frees all resources
