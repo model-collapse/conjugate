@@ -370,34 +370,74 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 
 	startTime := time.Now()
 
+	// Check if query contains aggregation definitions (push-down from coordinator).
+	// Wrapped queries have format: {"query": <filter>, "aggs": <agg_defs>}
+	var aggsMap map[string]interface{}
+	queryBytes := req.Query
+	var wrappedQuery map[string]interface{}
+	if err := json.Unmarshal(req.Query, &wrappedQuery); err == nil {
+		if aggs, ok := wrappedQuery["aggs"]; ok {
+			if aggsTyped, ok := aggs.(map[string]interface{}); ok {
+				aggsMap = aggsTyped
+				// Extract the actual query portion for Diagon search
+				if q, ok := wrappedQuery["query"]; ok {
+					queryBytes, _ = json.Marshal(q)
+				} else {
+					queryBytes, _ = json.Marshal(map[string]interface{}{"match_all": map[string]interface{}{}})
+				}
+			}
+		}
+	}
+
+	// Determine max results
+	maxResults := int(req.Size)
+	if maxResults <= 0 {
+		if len(aggsMap) > 0 {
+			// Aggregation query: need ALL matching docs to compute aggregations locally
+			maxResults = 200000
+		} else {
+			maxResults = 100
+		}
+	}
+
 	// Execute search (UDF queries are embedded in req.Query JSON)
-	result, err := shard.Search(ctx, req.Query)
+	result, err := shard.Search(ctx, queryBytes, maxResults)
 	if err != nil {
 		s.logger.Error("Search failed", zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "search failed: %v", err)
 	}
 
-	tookMillis := time.Since(startTime).Milliseconds()
-
-	// Convert search result to proto
-	hits := make([]*pb.SearchHit, 0, len(result.Hits))
-	for _, hit := range result.Hits {
-		// Convert document to protobuf Struct
-		docStruct, err := structpb.NewStruct(hit.Source)
-		if err != nil {
-			s.logger.Error("Failed to convert document", zap.Error(err))
-			continue
-		}
-
-		hits = append(hits, &pb.SearchHit{
-			Id:     hit.ID,
-			Score:  hit.Score,
-			Source: docStruct,
-		})
+	// Compute aggregations locally if push-down definitions are present
+	var aggregations map[string]*pb.AggregationResult
+	if len(aggsMap) > 0 && len(result.Hits) > 0 {
+		aggregations = computeDataNodeAggregations(result.Hits, aggsMap)
 	}
 
-	// Convert aggregations
-	aggregations := convertAggregations(result.Aggregations)
+	// If no push-down aggs, fall back to Diagon-computed aggregations
+	if aggregations == nil {
+		aggregations = convertAggregations(result.Aggregations)
+	}
+
+	tookMillis := time.Since(startTime).Milliseconds()
+
+	// For aggregation-only queries (aggsMap present), skip converting hits to proto
+	// since the coordinator set size=0 and doesn't need document data.
+	var hits []*pb.SearchHit
+	if len(aggsMap) == 0 {
+		hits = make([]*pb.SearchHit, 0, len(result.Hits))
+		for _, hit := range result.Hits {
+			docStruct, err := structpb.NewStruct(hit.Source)
+			if err != nil {
+				s.logger.Error("Failed to convert document", zap.Error(err))
+				continue
+			}
+			hits = append(hits, &pb.SearchHit{
+				Id:     hit.ID,
+				Score:  hit.Score,
+				Source: docStruct,
+			})
+		}
+	}
 
 	return &pb.SearchResponse{
 		TookMillis: tookMillis,
@@ -672,63 +712,31 @@ func convertBuckets(buckets []map[string]interface{}) []*pb.AggregationBucket {
 	return result
 }
 
-// ForceMerge optimizes a shard by merging segments
+// ForceMerge optimizes a shard by merging segments.
+// DISABLED: Diagon's SegmentMerger::merge() is a stub that creates empty merged
+// segments (no data files), then deletes the originals. This destroys all index data.
+// Re-enable once upstream Diagon implements SegmentMerger properly.
 func (s *DataService) ForceMerge(ctx context.Context, req *pb.ForceMergeRequest) (*pb.ForceMergeResponse, error) {
-	s.logger.Info("ForceMerge request",
+	s.logger.Warn("ForceMerge SKIPPED: Diagon SegmentMerger is a stub that destroys data",
 		zap.String("index", req.IndexName),
 		zap.Int32("shard_id", req.ShardId),
 		zap.Int32("max_segments", req.MaxSegments))
 
-	// Validate request
-	if req.IndexName == "" {
-		return nil, status.Error(codes.InvalidArgument, "index name is required")
-	}
-	if req.MaxSegments <= 0 {
-		return nil, status.Error(codes.InvalidArgument, "max_segments must be positive")
-	}
-
-	// Get shard
-	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
-	}
-
-	// Get stats before merge
-	statsBefore := shard.Stats()
-	segmentsBefore := statsBefore.SegmentCount
-
-	// Flush if requested
-	if req.Flush {
-		if err := shard.Flush(ctx); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to flush before merge: %v", err)
+	// Flush pending docs to make them searchable (this is safe)
+	if req.IndexName != "" {
+		shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+		if err == nil {
+			if flushErr := shard.Flush(ctx); flushErr != nil {
+				s.logger.Warn("Flush during force merge failed", zap.Error(flushErr))
+			}
 		}
 	}
 
-	// Track duration
-	startTime := time.Now()
-
-	// Perform force merge
-	if err := shard.ForceMerge(int(req.MaxSegments)); err != nil {
-		return nil, status.Errorf(codes.Internal, "force merge failed: %v", err)
-	}
-
-	duration := time.Since(startTime)
-
-	// Get stats after merge
-	statsAfter := shard.Stats()
-	segmentsAfter := statsAfter.SegmentCount
-
-	s.logger.Info("Force merge completed",
-		zap.String("index", req.IndexName),
-		zap.Int32("shard_id", req.ShardId),
-		zap.Int32("segments_before", segmentsBefore),
-		zap.Int32("segments_after", segmentsAfter),
-		zap.Int64("duration_ms", duration.Milliseconds()))
-
+	// Return success without actually merging
 	return &pb.ForceMergeResponse{
-		Acknowledged:    true,
-		SegmentsBefore:  segmentsBefore,
-		SegmentsAfter:   segmentsAfter,
-		DurationMillis:  duration.Milliseconds(),
+		Acknowledged:   true,
+		SegmentsBefore: 0,
+		SegmentsAfter:  0,
+		DurationMillis: 0,
 	}, nil
 }

@@ -2,6 +2,7 @@ package planner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -78,12 +79,14 @@ type Stats struct {
 
 // PhysicalScan represents a physical scan operation
 type PhysicalScan struct {
-	IndexName   string
-	Shards      []int32
-	Filter      *Expression
-	Fields      []string // Fields to retrieve (projection)
+	IndexName    string
+	Shards       []int32
+	Filter       *Expression
+	Fields       []string // Fields to retrieve (projection)
 	OutputSchema *Schema
 	EstimatedCost *Cost
+	MaxResults   int              // Max docs to retrieve from data node (0 = default 100)
+	Aggregations []*Aggregation   // Aggregations to push down to data node
 }
 
 func (s *PhysicalScan) Type() PhysicalPlanType      { return PhysicalPlanTypeScan }
@@ -106,12 +109,27 @@ func (s *PhysicalScan) Execute(ctx context.Context) (*ExecutionResult, error) {
 
 	// Convert filter expression to JSON query
 	// If no filter, use match_all query
-	var queryBytes []byte
+	var queryMap map[string]interface{}
 	if s.Filter == nil {
-		// Use match_all query when no filter is present
-		queryBytes = []byte(`{"match_all":{}}`)
+		queryMap = map[string]interface{}{"match_all": map[string]interface{}{}}
 	} else {
-		queryBytes, err = expressionToJSON(s.Filter)
+		queryMap = expressionToMap(s.Filter)
+	}
+
+	// If aggregations are present, wrap query with aggregation definitions
+	// so the data node can compute aggregations locally (push-down).
+	var queryBytes []byte
+	if len(s.Aggregations) > 0 {
+		wrappedQuery := map[string]interface{}{
+			"query": queryMap,
+			"aggs":  serializeAggregations(s.Aggregations),
+		}
+		queryBytes, err = json.Marshal(wrappedQuery)
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize aggregation query: %w", err)
+		}
+	} else {
+		queryBytes, err = json.Marshal(queryMap)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert filter to JSON: %w", err)
 		}
@@ -120,18 +138,25 @@ func (s *PhysicalScan) Execute(ctx context.Context) (*ExecutionResult, error) {
 	if execCtx.Logger != nil {
 		execCtx.Logger.Info("Calling QueryExecutor.ExecuteSearch",
 			zap.String("index", s.IndexName),
-			zap.String("query", string(queryBytes)))
+			zap.String("query", string(queryBytes)),
+			zap.Bool("has_aggs", len(s.Aggregations) > 0))
 	}
 
-	// Execute distributed search via QueryExecutor
-	// Note: QueryExecutor handles pagination internally, but for scan we want all results
+	// MaxResults controls how many docs the coordinator receives.
+	// For aggregation queries (MaxResults=0 + Aggregations present): data node computes
+	// aggs locally, coordinator receives 0 docs via gRPC.
+	// For non-aggregation queries: coordinator gets from+size docs.
+	maxResults := s.MaxResults
+	if maxResults <= 0 && len(s.Aggregations) == 0 {
+		maxResults = 100
+	}
 	executorResult, err := execCtx.QueryExecutor.ExecuteSearch(
 		ctx,
 		s.IndexName,
 		queryBytes,
 		nil, // filterExpression (separate from query)
 		0,   // from
-		10000, // size (large enough to get all results for this node)
+		maxResults,
 	)
 	if err != nil {
 		if execCtx.Logger != nil {
@@ -231,9 +256,11 @@ func (a *PhysicalAggregate) Execute(ctx context.Context) (*ExecutionResult, erro
 		return nil, err
 	}
 
-	// Aggregations are computed by the scan/distributed query executor
-	// This node just passes them through (they're already in childResult.Aggregations)
-	// For post-processing aggregations, we would compute them here from childResult.Rows
+	// Compute aggregations from the returned rows if no aggregation results
+	// were provided by the data node (i.e., aggregations computed coordinator-side)
+	if len(childResult.Aggregations) == 0 && len(a.Aggregations) > 0 && len(childResult.Rows) > 0 {
+		childResult.Aggregations = computeAggregations(childResult.Rows, a.Aggregations)
+	}
 
 	return childResult, nil
 }
@@ -261,9 +288,11 @@ func (a *PhysicalHashAggregate) Execute(ctx context.Context) (*ExecutionResult, 
 		return nil, err
 	}
 
-	// Aggregations are computed by the scan/distributed query executor
-	// This node just passes them through (they're already in childResult.Aggregations)
-	// Hash aggregate is used for efficiency, but the aggregation merge is handled by QueryExecutor
+	// Compute aggregations from the returned rows if no aggregation results
+	// were provided by the data node (i.e., aggregations computed coordinator-side)
+	if len(childResult.Aggregations) == 0 && len(a.Aggregations) > 0 && len(childResult.Rows) > 0 {
+		childResult.Aggregations = computeAggregations(childResult.Rows, a.Aggregations)
+	}
 
 	return childResult, nil
 }
@@ -405,6 +434,7 @@ func (p *Planner) planScan(logical *LogicalScan) (PhysicalPlan, error) {
 		Fields:        []string{}, // TODO: Get from projection
 		OutputSchema:  logical.Schema(),
 		EstimatedCost: cost,
+		MaxResults:    100, // Default for non-aggregation queries
 	}, nil
 }
 
@@ -444,6 +474,11 @@ func (p *Planner) planAggregate(logical *LogicalAggregate) (PhysicalPlan, error)
 		return nil, err
 	}
 
+	// Push aggregation computation to data node.
+	// Set MaxResults to 0: data node computes aggs locally, no docs transferred.
+	setChildScanAggregations(child, logical.Aggregations)
+	setChildScanMaxResults(child, 0)
+
 	// Choose between hash aggregate and regular aggregate based on cardinality
 	cost := p.CostModel.EstimateAggregateCost(logical, child.Cost())
 
@@ -465,6 +500,55 @@ func (p *Planner) planAggregate(logical *LogicalAggregate) (PhysicalPlan, error)
 		OutputSchema:  logical.OutputSchema,
 		EstimatedCost: cost,
 	}, nil
+}
+
+// setChildScanMaxResults walks the physical plan tree and sets MaxResults
+// on any PhysicalScan nodes found.
+func setChildScanMaxResults(plan PhysicalPlan, maxResults int) {
+	if scan, ok := plan.(*PhysicalScan); ok {
+		scan.MaxResults = maxResults
+		return
+	}
+	for _, child := range plan.Children() {
+		setChildScanMaxResults(child, maxResults)
+	}
+}
+
+// setChildScanAggregations walks the physical plan tree and sets aggregation
+// definitions on any PhysicalScan nodes found. This enables aggregation
+// push-down: the data node computes aggregations locally instead of
+// transferring all documents to the coordinator.
+func setChildScanAggregations(plan PhysicalPlan, aggs []*Aggregation) {
+	if scan, ok := plan.(*PhysicalScan); ok {
+		scan.Aggregations = aggs
+		return
+	}
+	for _, child := range plan.Children() {
+		setChildScanAggregations(child, aggs)
+	}
+}
+
+// serializeAggregations converts []*Aggregation to the OpenSearch JSON format
+// for passing to the data node.
+func serializeAggregations(aggs []*Aggregation) map[string]interface{} {
+	result := make(map[string]interface{})
+	for _, agg := range aggs {
+		aggBody := map[string]interface{}{
+			"field": agg.Field,
+		}
+		for k, v := range agg.Params {
+			aggBody[k] = v
+		}
+		aggDef := map[string]interface{}{
+			string(agg.Type): aggBody,
+		}
+		// Handle sub-aggregations
+		if len(agg.SubAggs) > 0 {
+			aggDef["aggs"] = serializeAggregations(agg.SubAggs)
+		}
+		result[agg.Name] = aggDef
+	}
+	return result
 }
 
 func (p *Planner) planSort(logical *LogicalSort) (PhysicalPlan, error) {
