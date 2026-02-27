@@ -254,19 +254,17 @@ func TestConvertSearchRequestSimple(t *testing.T) {
 	plan, err := converter.ConvertSearchRequest(req, "products", []int32{0, 1, 2})
 	require.NoError(t, err)
 
-	// Plan should be: Limit -> Filter -> Scan
+	// Plan should be: Limit -> Scan (filter pushed into scan)
 	limit, ok := plan.(*LogicalLimit)
 	require.True(t, ok)
 	assert.Equal(t, int64(10), limit.Limit)
 
-	filter, ok := limit.Child.(*LogicalFilter)
-	require.True(t, ok)
-	assert.Equal(t, ExprTypeTerm, filter.Condition.Type)
-
-	scan, ok := filter.Child.(*LogicalScan)
+	scan, ok := limit.Child.(*LogicalScan)
 	require.True(t, ok)
 	assert.Equal(t, "products", scan.IndexName)
 	assert.Len(t, scan.Shards, 3)
+	require.NotNil(t, scan.Filter)
+	assert.Equal(t, ExprTypeTerm, scan.Filter.Type)
 }
 
 func TestConvertSearchRequestWithSort(t *testing.T) {
@@ -422,7 +420,7 @@ func TestConvertSearchRequestComplex(t *testing.T) {
 	plan, err := converter.ConvertSearchRequest(req, "products", []int32{0, 1, 2})
 	require.NoError(t, err)
 
-	// Plan should be: Limit -> Sort -> Project -> Filter -> Scan
+	// Plan should be: Limit -> Sort -> Project -> Scan (filter pushed into scan)
 	limit, ok := plan.(*LogicalLimit)
 	require.True(t, ok)
 	assert.Equal(t, int64(20), limit.Offset)
@@ -436,13 +434,11 @@ func TestConvertSearchRequestComplex(t *testing.T) {
 	require.True(t, ok)
 	assert.Len(t, project.Fields, 3)
 
-	filter, ok := project.Child.(*LogicalFilter)
-	require.True(t, ok)
-	assert.Equal(t, ExprTypeBool, filter.Condition.Type)
-
-	scan, ok := filter.Child.(*LogicalScan)
+	scan, ok := project.Child.(*LogicalScan)
 	require.True(t, ok)
 	assert.Equal(t, "products", scan.IndexName)
+	require.NotNil(t, scan.Filter)
+	assert.Equal(t, ExprTypeBool, scan.Filter.Type)
 }
 
 func TestConvertAllAggregationTypes(t *testing.T) {
