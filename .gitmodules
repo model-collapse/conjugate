@@ -1,4 +1,4 @@
 [submodule "src/3rdparty/diagon"]
 	path = src/3rdparty/diagon
 	url = https://github.com/model-collapse/diagon.git
-	branch = main
+	branch = v0.1.0
