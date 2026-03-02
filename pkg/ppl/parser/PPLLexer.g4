@@ -35,7 +35,6 @@ EVENTSTATS: 'eventstats';
 STREAMSTATS: 'streamstats';
 REVERSE: 'reverse';
 FLATTEN: 'flatten';
-FILLNULL: 'fillnull';
 
 // Stats keywords
 BY: 'by';

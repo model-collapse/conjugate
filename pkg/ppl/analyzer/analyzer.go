@@ -992,16 +992,46 @@ func (a *Analyzer) analyzeFlattenCommand(cmd *ast.FlattenCommand) error {
 	return nil
 }
 
+// isConstantValue checks if an expression is a constant value suitable for fillnull
+func isConstantValue(expr ast.Expression) bool {
+	switch e := expr.(type) {
+	case *ast.Literal:
+		return true
+	case *ast.UnaryExpression:
+		// Allow unary minus on numeric literals (e.g., -1, -3.14)
+		_, isLiteral := e.Operand.(*ast.Literal)
+		return isLiteral
+	default:
+		return false
+	}
+}
+
 // analyzeFillnullCommand validates the fillnull command
 func (a *Analyzer) analyzeFillnullCommand(cmd *ast.FillnullCommand) error {
-	// Validate the default value expression
+	// Two forms: per-field assignments OR default value with optional field list
+	if len(cmd.Assignments) > 0 {
+		// Per-field assignment form: fillnull cpu=0, memory=100
+		for i, assignment := range cmd.Assignments {
+			if assignment.Field == "" {
+				return fmt.Errorf("fillnull assignment at position %d has empty field name", i)
+			}
+			if assignment.Value == nil {
+				return fmt.Errorf("fillnull assignment for field '%s' has nil value", assignment.Field)
+			}
+			if !isConstantValue(assignment.Value) {
+				return fmt.Errorf("fillnull assignment value for field '%s' must be a literal (string, number, boolean, or null)", assignment.Field)
+			}
+		}
+		return nil
+	}
+
+	// Default value form: fillnull value=<expr> [fields field1, field2]
 	if cmd.DefaultValue == nil {
 		return fmt.Errorf("fillnull command requires a default value expression")
 	}
 
-	// The value should be a literal (string, number, bool, or null)
-	// We validate this to ensure it's a constant value, not a complex expression
-	if _, ok := cmd.DefaultValue.(*ast.Literal); !ok {
+	// The value should be a constant (literal or unary expression on literal)
+	if !isConstantValue(cmd.DefaultValue) {
 		return fmt.Errorf("fillnull value must be a literal (string, number, boolean, or null)")
 	}
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/conjugate/conjugate/pkg/common/config"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -244,7 +245,10 @@ func TestUDFIntegration_ErrorHandling(t *testing.T) {
 		MasterAddr: "127.0.0.1:8000",
 	}
 
-	node, err := NewCoordinationNode(cfg, logger)
+	// Use a fresh Prometheus registry to avoid duplicate registration panic
+	// when running alongside other tests that use the default registry.
+	reg := prometheus.NewRegistry()
+	node, err := NewCoordinationNodeWithRegistry(cfg, logger, reg)
 	require.NoError(t, err)
 	defer node.Stop(context.Background())
 
@@ -328,7 +332,8 @@ func TestUDFIntegration_Concurrency(t *testing.T) {
 		MasterAddr: "127.0.0.1:8000",
 	}
 
-	node, err := NewCoordinationNode(cfg, logger)
+	reg := prometheus.NewRegistry()
+	node, err := NewCoordinationNodeWithRegistry(cfg, logger, reg)
 	require.NoError(t, err)
 	defer node.Stop(context.Background())
 
@@ -432,7 +437,8 @@ func TestUDFIntegration_MultipleVersions(t *testing.T) {
 		MasterAddr: "127.0.0.1:8000",
 	}
 
-	node, err := NewCoordinationNode(cfg, logger)
+	reg := prometheus.NewRegistry()
+	node, err := NewCoordinationNodeWithRegistry(cfg, logger, reg)
 	require.NoError(t, err)
 	defer node.Stop(context.Background())
 
@@ -504,8 +510,9 @@ func TestUDFIntegration_MultipleVersions(t *testing.T) {
 		versions, ok := response["versions"].([]interface{})
 		require.True(t, ok)
 		assert.Len(t, versions, 2)
-		assert.Contains(t, versions, "1.0.0")
-		assert.Contains(t, versions, "1.1.0")
+		versionStrings := extractVersionStrings(versions)
+		assert.Contains(t, versionStrings, "1.0.0")
+		assert.Contains(t, versionStrings, "1.1.0")
 	})
 
 	// Get specific version
@@ -545,7 +552,8 @@ func TestUDFIntegration_MultipleVersions(t *testing.T) {
 		versions, ok := response["versions"].([]interface{})
 		require.True(t, ok)
 		assert.Len(t, versions, 1)
-		assert.Contains(t, versions, "1.1.0")
+		versionStrings := extractVersionStrings(versions)
+		assert.Contains(t, versionStrings, "1.1.0")
 	})
 }
 
@@ -564,7 +572,8 @@ func TestUDFIntegration_Performance(t *testing.T) {
 		MasterAddr: "127.0.0.1:8000",
 	}
 
-	node, err := NewCoordinationNode(cfg, logger)
+	reg := prometheus.NewRegistry()
+	node, err := NewCoordinationNodeWithRegistry(cfg, logger, reg)
 	require.NoError(t, err)
 	defer node.Stop(context.Background())
 
@@ -694,4 +703,21 @@ func createMinimalWASMModule() string {
 	}
 
 	return base64.StdEncoding.EncodeToString(wasmBytes)
+}
+
+// extractVersionStrings extracts the "version" string from a list of version
+// objects returned by the UDF versions API (each element is a map with a
+// "version" key).
+func extractVersionStrings(versions []interface{}) []string {
+	result := make([]string, 0, len(versions))
+	for _, v := range versions {
+		if m, ok := v.(map[string]interface{}); ok {
+			if ver, ok := m["version"].(string); ok {
+				result = append(result, ver)
+			}
+		} else if s, ok := v.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
 }

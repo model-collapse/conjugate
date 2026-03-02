@@ -65,10 +65,11 @@ func TestReplaceCommand_WithFilter(t *testing.T) {
 func TestReplaceCommand_WithFields(t *testing.T) {
 	p := newTestPipeline()
 	p.schema.AddField("old_field", analyzer.FieldTypeString)
-	p.schema.AddField("value", analyzer.FieldTypeString)
+	p.schema.AddField("content", analyzer.FieldTypeString)
 
 	// Replace and then project specific fields
-	query := "source=logs | replace 'old' with 'new' in value | fields value"
+	// Note: 'value' is a reserved keyword in PPL (used by fillnull), so use 'content' instead
+	query := "source=logs | replace 'old' with 'new' in content | fields content"
 
 	// Parse and plan
 	physicalPlan, err := p.parseAndPlan(query)

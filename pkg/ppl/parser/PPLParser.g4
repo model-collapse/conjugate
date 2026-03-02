@@ -235,7 +235,8 @@ replaceMapping
 // fillnull: Fill null/missing values in fields
 // fillnull field1=value1, field2=value2 or fillnull value=default fields field1, field2
 fillnullCommand
-    : FILLNULL fillnullAssignment (COMMA fillnullAssignment)*
+    : FILLNULL VALUE EQ expression (FIELDS fieldList)?           # FillnullWithDefault
+    | FILLNULL fillnullAssignment (COMMA fillnullAssignment)*    # FillnullWithAssignments
     ;
 
 fillnullAssignment
@@ -322,11 +323,6 @@ flattenCommand
     : FLATTEN fieldReference
     ;
 
-// fillnull: Fill NULL/missing values with a default value
-// fillnull value=<value> [fields <field_list>]
-fillnullCommand
-    : FILLNULL VALUE EQ literalValue (FIELDS fieldList)?
-    ;
 
 // Boolean value helper
 booleanValue

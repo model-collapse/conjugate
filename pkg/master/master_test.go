@@ -16,14 +16,9 @@ func TestNewMasterNode(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := &config.MasterConfig{
-		NodeID:      "test-master",
-		BindAddr:    "127.0.0.1",
-		RaftPort:    9300,
-		GRPCPort:    9301,
-		DataDir:     tmpDir,
-		Peers:       []string{},
-		LogLevel:    "debug",
-		MetricsPort: 9400,
+		NodeID:   "test-master",
+		BindAddr: "127.0.0.1",
+		DataDir:  tmpDir,
 	}
 
 	node, err := NewMasterNode(cfg, logger)
@@ -74,10 +69,7 @@ func TestMasterNodeIsLeader(t *testing.T) {
 	cfg := &config.MasterConfig{
 		NodeID:   "test-master",
 		BindAddr: "127.0.0.1",
-		RaftPort: 9300,
-		GRPCPort: 9301,
 		DataDir:  tmpDir,
-		Peers:    []string{}, // Bootstrap
 	}
 
 	node, err := NewMasterNode(cfg, logger)

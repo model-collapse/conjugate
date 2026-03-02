@@ -2,6 +2,7 @@ package coordination
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/conjugate/conjugate/pkg/common/config"
@@ -35,7 +36,7 @@ func TestUDFRoutesRegistration(t *testing.T) {
 	udfRouteCount := 0
 	for _, route := range routes {
 		t.Logf("Route: %s %s", route.Method, route.Path)
-		if len(route.Path) >= 13 && route.Path[:13] == "/api/v1/udfs" {
+		if strings.HasPrefix(route.Path, "/api/v1/udfs") {
 			udfRouteCount++
 			t.Logf("  ^^ UDF route found!")
 		}

@@ -18,14 +18,15 @@ import (
 
 // DataNode represents a data node in the CONJUGATE cluster
 type DataNode struct {
-	cfg          *config.DataNodeConfig
-	logger       *zap.Logger
-	grpcServer   *grpc.Server
-	diagon       *diagon.DiagonBridge
-	udfRegistry  *wasm.UDFRegistry
-	shards       *ShardManager
-	masterClient *MasterClient
-	mu           sync.RWMutex
+	cfg                *config.DataNodeConfig
+	logger             *zap.Logger
+	grpcServer         *grpc.Server
+	diagon             *diagon.DiagonBridge
+	udfRegistry        *wasm.UDFRegistry
+	shards             *ShardManager
+	masterClient       *MasterClient
+	autoMergeScheduler *AutoMergeScheduler
+	mu                 sync.RWMutex
 }
 
 // NewDataNode creates a new data node
@@ -76,8 +77,11 @@ func NewDataNode(cfg *config.DataNodeConfig, logger *zap.Logger) (*DataNode, err
 	// Create master client
 	masterClient := NewMasterClient(cfg.NodeID, cfg.MasterAddr, logger)
 
-	// Create gRPC server
-	grpcServer := grpc.NewServer()
+	// Create gRPC server with increased message size for bulk indexing
+	grpcServer := grpc.NewServer(
+		grpc.MaxRecvMsgSize(64*1024*1024), // 64MB for large bulk requests
+		grpc.MaxSendMsgSize(64*1024*1024), // 64MB for large bulk responses
+	)
 
 	node := &DataNode{
 		cfg:          cfg,
@@ -88,6 +92,10 @@ func NewDataNode(cfg *config.DataNodeConfig, logger *zap.Logger) (*DataNode, err
 		shards:       shardManager,
 		masterClient: masterClient,
 	}
+
+	// Create auto-merge scheduler
+	autoMergeScheduler := NewAutoMergeScheduler(node, DefaultAutoMergeConfig(), logger)
+	node.autoMergeScheduler = autoMergeScheduler
 
 	// Register gRPC service
 	dataService := NewDataService(node, logger)
@@ -132,12 +140,23 @@ func (d *DataNode) Start(ctx context.Context) error {
 	// Start heartbeat (using master client)
 	d.masterClient.StartHeartbeat(ctx, 10*time.Second)
 
+	// Auto-merge scheduler is DISABLED: Diagon's SegmentMerger::merge() is a stub
+	// that creates empty merged segments (no data files), then deletes the originals.
+	// This destroys all segment data. Re-enable once upstream Diagon implements
+	// SegmentMerger properly (copies postings, stored fields, doc values, norms).
+	d.logger.Warn("Auto-merge scheduler DISABLED: Diagon SegmentMerger is a stub that destroys data")
+
 	return nil
 }
 
 // Stop stops the data node
 func (d *DataNode) Stop(ctx context.Context) error {
 	d.logger.Info("Stopping data node")
+
+	// Stop auto-merge scheduler first (before stopping shards)
+	if err := d.autoMergeScheduler.Stop(); err != nil {
+		d.logger.Warn("Error stopping auto-merge scheduler", zap.Error(err))
+	}
 
 	// Stop heartbeat
 	d.masterClient.StopHeartbeat()
@@ -295,7 +314,7 @@ func (d *DataNode) SearchShard(ctx context.Context, indexName string, shardID in
 		return nil, err
 	}
 
-	return shard.Search(ctx, query)
+	return shard.Search(ctx, query, 100) // Default limit for direct calls
 }
 
 // NodeStats represents node statistics

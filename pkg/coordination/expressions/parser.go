@@ -44,7 +44,14 @@ func (p *Parser) Parse(exprMap map[string]interface{}) (Expression, error) {
 
 // parseOperator parses an operator expression
 func (p *Parser) parseOperator(opStr string, exprMap map[string]interface{}) (Expression, error) {
-	// Try binary operators first
+	// If "operand" key is present, this is a unary expression (handles
+	// ambiguous operators like "-" which can be both subtract and negate).
+	if _, hasOperand := exprMap["operand"]; hasOperand {
+		unOp := p.parseUnaryOperator(opStr)
+		return p.parseUnaryOp(unOp, exprMap)
+	}
+
+	// Try binary operators
 	binOp := p.parseBinaryOperator(opStr)
 	if binOp != OpUnknown {
 		return p.parseBinaryOp(binOp, exprMap)

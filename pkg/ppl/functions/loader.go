@@ -142,6 +142,37 @@ func GetBuiltinWASM(udfName string) ([]byte, error) {
 		"agg_earliest", "agg_latest":
 		return placeholderWASM, nil
 
+	// JSON functions
+	case "json_extract", "json_extract_scalar", "json_valid",
+		"json_keys", "json_values", "json_length",
+		"json_array", "json_object", "json_type",
+		"json_set", "json_delete",
+		"json_array_contains", "json_array_append",
+		"json_format", "json_compact":
+		return placeholderWASM, nil
+
+	// Cryptographic and encoding functions
+	case "crypto_md5", "crypto_sha1", "crypto_sha256", "crypto_sha512",
+		"crypto_base64_encode", "crypto_base64_decode",
+		"crypto_url_encode", "crypto_url_decode",
+		"crypto_hex_encode", "crypto_hex_decode":
+		return placeholderWASM, nil
+
+	// IP address functions
+	case "ip_is_valid", "ip_is_valid_ipv4", "ip_is_valid_ipv6",
+		"ip_is_private", "ip_is_public", "ip_is_loopback", "ip_is_multicast",
+		"ip_cidr_match", "ip_cidr_contains",
+		"ip_to_int", "ip_from_int",
+		"ip_network", "ip_broadcast", "ip_netmask",
+		"ip_in_range":
+		return placeholderWASM, nil
+
+	// System functions
+	case "system_version", "system_database", "system_user",
+		"system_connection_id", "system_session_user",
+		"system_null", "system_current_catalog", "system_current_schema":
+		return placeholderWASM, nil
+
 	// Comparison variants (for filter expressions)
 	case "math_abs_cmp", "math_ceil_cmp", "math_floor_cmp":
 		return placeholderWASM, nil

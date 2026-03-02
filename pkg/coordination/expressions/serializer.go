@@ -26,7 +26,9 @@ func (s *Serializer) Serialize(expr Expression) ([]byte, error) {
 		return nil, err
 	}
 
-	return s.buf.Bytes(), nil
+	out := make([]byte, s.buf.Len())
+	copy(out, s.buf.Bytes())
+	return out, nil
 }
 
 // serializeNode serializes a single expression node

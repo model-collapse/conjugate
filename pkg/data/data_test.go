@@ -15,7 +15,7 @@ func TestNewDataNode(t *testing.T) {
 		NodeID:      "node-1",
 		BindAddr:    "127.0.0.1",
 		GRPCPort:    9090,
-		DataDir:     "/tmp/test-data",
+		DataDir:     t.TempDir(),
 		MasterAddr:  "localhost:9000",
 		StorageTier: "hot",
 		MaxShards:   10,
@@ -37,7 +37,7 @@ func TestNewDataNode(t *testing.T) {
 func TestNewDataNode_NilLogger(t *testing.T) {
 	cfg := &config.DataNodeConfig{
 		NodeID:   "node-1",
-		DataDir:  "/tmp/test-data",
+		DataDir:  t.TempDir(),
 		MaxShards: 10,
 	}
 
@@ -50,7 +50,7 @@ func TestNewDataNode_NilLogger(t *testing.T) {
 func TestDataNode_CreateShard(t *testing.T) {
 	cfg := &config.DataNodeConfig{
 		NodeID:      "node-1",
-		DataDir:     "/tmp/test-data",
+		DataDir:     t.TempDir(),
 		MasterAddr:  "localhost:9000",
 		StorageTier: "hot",
 		MaxShards:   10,
@@ -71,9 +71,10 @@ func TestDataNode_CreateShard(t *testing.T) {
 }
 
 func TestDataNode_DeleteShard(t *testing.T) {
+	tmpDir := t.TempDir()
 	cfg := &config.DataNodeConfig{
 		NodeID:      "node-1",
-		DataDir:     "/tmp/test-data",
+		DataDir:     tmpDir,
 		MasterAddr:  "localhost:9000",
 		StorageTier: "hot",
 		MaxShards:   10,
@@ -98,9 +99,10 @@ func TestDataNode_DeleteShard(t *testing.T) {
 }
 
 func TestDataNode_IndexDocument(t *testing.T) {
+	tmpDir := t.TempDir()
 	cfg := &config.DataNodeConfig{
 		NodeID:      "node-1",
-		DataDir:     "/tmp/test-data",
+		DataDir:     tmpDir,
 		MasterAddr:  "localhost:9000",
 		StorageTier: "hot",
 		MaxShards:   10,
@@ -128,7 +130,7 @@ func TestDataNode_IndexDocument(t *testing.T) {
 func TestDataNode_IndexDocument_NonExistentShard(t *testing.T) {
 	cfg := &config.DataNodeConfig{
 		NodeID:      "node-1",
-		DataDir:     "/tmp/test-data",
+		DataDir:     t.TempDir(),
 		MasterAddr:  "localhost:9000",
 		StorageTier: "hot",
 		MaxShards:   10,
@@ -150,9 +152,10 @@ func TestDataNode_IndexDocument_NonExistentShard(t *testing.T) {
 }
 
 func TestDataNode_SearchShard(t *testing.T) {
+	tmpDir := t.TempDir()
 	cfg := &config.DataNodeConfig{
 		NodeID:      "node-1",
-		DataDir:     "/tmp/test-data",
+		DataDir:     tmpDir,
 		MasterAddr:  "localhost:9000",
 		StorageTier: "hot",
 		MaxShards:   10,
@@ -168,8 +171,8 @@ func TestDataNode_SearchShard(t *testing.T) {
 	err = node.CreateShard(ctx, "test-index", 0, true)
 	require.NoError(t, err)
 
-	// Execute search
-	query := []byte(`{"query": {"match_all": {}}}`)
+	// Execute search (Diagon expects the query type directly, not wrapped in "query")
+	query := []byte(`{"match_all": {}}`)
 	result, err := node.SearchShard(ctx, "test-index", 0, query)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -178,7 +181,7 @@ func TestDataNode_SearchShard(t *testing.T) {
 func TestDataNode_SearchShard_NonExistentShard(t *testing.T) {
 	cfg := &config.DataNodeConfig{
 		NodeID:      "node-1",
-		DataDir:     "/tmp/test-data",
+		DataDir:     t.TempDir(),
 		MasterAddr:  "localhost:9000",
 		StorageTier: "hot",
 		MaxShards:   10,
@@ -198,9 +201,10 @@ func TestDataNode_SearchShard_NonExistentShard(t *testing.T) {
 }
 
 func TestDataNode_CollectStats(t *testing.T) {
+	tmpDir := t.TempDir()
 	cfg := &config.DataNodeConfig{
 		NodeID:      "node-1",
-		DataDir:     "/tmp/test-data",
+		DataDir:     tmpDir,
 		MasterAddr:  "localhost:9000",
 		StorageTier: "hot",
 		MaxShards:   10,

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -677,5 +678,5 @@ func ExampleQueryParser_ParseSearchRequest() {
 	_ = complexity
 
 	// Output: Query parsed successfully
-	println("Query parsed successfully")
+	fmt.Println("Query parsed successfully")
 }

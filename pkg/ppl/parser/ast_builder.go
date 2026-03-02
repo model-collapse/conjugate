@@ -1606,6 +1606,57 @@ func (b *ASTBuilder) VisitReplaceMapping(ctx *generated.ReplaceMappingContext) i
 
 // VisitFillnullCommand builds a FillnullCommand AST node
 func (b *ASTBuilder) VisitFillnullCommand(ctx *generated.FillnullCommandContext) interface{} {
+	// This is a dispatch function for labeled alternatives
+	// ANTLR4 will call the specific alternative visitor based on grammar
+	return ctx.GetChild(0).(antlr.ParseTree).Accept(b)
+}
+
+// VisitFillnullWithDefault handles: fillnull value=<expr> [fields field1, field2]
+func (b *ASTBuilder) VisitFillnullWithDefault(ctx *generated.FillnullWithDefaultContext) interface{} {
+	// Get the default value expression
+	exprCtx := ctx.Expression()
+	if exprCtx == nil {
+		return fmt.Errorf("fillnull requires a value expression")
+	}
+
+	result := exprCtx.Accept(b)
+	if err, ok := result.(error); ok {
+		return err
+	}
+
+	defaultValue, ok := result.(ast.Expression)
+	if !ok {
+		return fmt.Errorf("fillnull value must be an expression")
+	}
+
+	// Get optional field list
+	var fields []ast.Expression
+	fieldListCtx := ctx.FieldList()
+	if fieldListCtx != nil {
+		result := fieldListCtx.Accept(b)
+		if err, ok := result.(error); ok {
+			return err
+		}
+		if fieldNames, ok := result.([]string); ok {
+			fields = make([]ast.Expression, len(fieldNames))
+			for i, name := range fieldNames {
+				fields[i] = &ast.FieldReference{
+					BaseNode: ast.BaseNode{},
+					Name:     name,
+				}
+			}
+		}
+	}
+
+	return &ast.FillnullCommand{
+		BaseNode:     ast.BaseNode{Pos: getPosition(ctx)},
+		DefaultValue: defaultValue,
+		Fields:       fields,
+	}
+}
+
+// VisitFillnullWithAssignments handles: fillnull field1=value1, field2=value2
+func (b *ASTBuilder) VisitFillnullWithAssignments(ctx *generated.FillnullWithAssignmentsContext) interface{} {
 	assignments := make([]*ast.FillnullAssignment, 0)
 
 	for _, assignCtx := range ctx.AllFillnullAssignment() {
@@ -1614,31 +1665,6 @@ func (b *ASTBuilder) VisitFillnullCommand(ctx *generated.FillnullCommandContext)
 			return err
 		}
 		assignments = append(assignments, result.(*ast.FillnullAssignment))
-	}
-
-	// Check if this is "value=<default>" syntax
-	var defaultValue ast.Expression
-	var fields []ast.Expression
-
-	// Look for "value" assignment which means default value for all/specified fields
-	for i, assignment := range assignments {
-		if assignment.Field == "value" {
-			defaultValue = assignment.Value
-			// Remove this assignment as it's not a field assignment
-			assignments = append(assignments[:i], assignments[i+1:]...)
-			break
-		}
-	}
-
-	// Look for "fields" pseudo-assignment (this would be handled differently in practice)
-	// For now, if we have a default value but no other assignments, apply to all fields
-	if defaultValue != nil && len(assignments) == 0 {
-		// Default value applies to all fields
-		return &ast.FillnullCommand{
-			BaseNode:     ast.BaseNode{Pos: getPosition(ctx)},
-			DefaultValue: defaultValue,
-			Fields:       fields,
-		}
 	}
 
 	return &ast.FillnullCommand{

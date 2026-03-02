@@ -39,9 +39,15 @@ func (a *Allocator) AllocateShards(state *raft.ClusterState, indexName string, n
 
 	decisions := make([]AllocationDecision, 0)
 
+	// Track in-flight allocation counts so each decision sees prior ones
+	pendingCounts := make(map[string]int)
+	for _, node := range dataNodes {
+		pendingCounts[node.NodeID] = 0
+	}
+
 	// Allocate primary shards
 	for shardID := int32(0); shardID < numShards; shardID++ {
-		node := a.selectNodeForShard(dataNodes, state, indexName, shardID, true)
+		node := a.selectNodeForShard(dataNodes, state, indexName, shardID, true, pendingCounts)
 		if node == nil {
 			return nil, fmt.Errorf("failed to allocate primary shard %d", shardID)
 		}
@@ -53,6 +59,7 @@ func (a *Allocator) AllocateShards(state *raft.ClusterState, indexName string, n
 			NodeID:    node.NodeID,
 			Reason:    "primary_allocation",
 		})
+		pendingCounts[node.NodeID]++
 
 		a.logger.Debug("Allocated primary shard",
 			zap.String("index", indexName),
@@ -73,7 +80,7 @@ func (a *Allocator) AllocateShards(state *raft.ClusterState, indexName string, n
 			}
 
 			// Select different node for replica
-			node := a.selectNodeForReplica(dataNodes, state, indexName, shardID, primaryNode)
+			node := a.selectNodeForReplica(dataNodes, state, indexName, shardID, primaryNode, pendingCounts)
 			if node == nil {
 				a.logger.Warn("Failed to allocate replica shard",
 					zap.String("index", indexName),
@@ -89,6 +96,7 @@ func (a *Allocator) AllocateShards(state *raft.ClusterState, indexName string, n
 				NodeID:    node.NodeID,
 				Reason:    fmt.Sprintf("replica_%d_allocation", replica),
 			})
+			pendingCounts[node.NodeID]++
 
 			a.logger.Debug("Allocated replica shard",
 				zap.String("index", indexName),
@@ -191,16 +199,16 @@ func (a *Allocator) getHealthyDataNodes(state *raft.ClusterState) []*raft.NodeMe
 	return nodes
 }
 
-func (a *Allocator) selectNodeForShard(nodes []*raft.NodeMeta, state *raft.ClusterState, indexName string, shardID int32, isPrimary bool) *raft.NodeMeta {
-	// Count shards per node
+func (a *Allocator) selectNodeForShard(nodes []*raft.NodeMeta, state *raft.ClusterState, indexName string, shardID int32, isPrimary bool, pendingCounts map[string]int) *raft.NodeMeta {
+	// Count shards per node (existing + pending in-flight allocations)
 	shardCounts := make(map[string]int)
 	for _, node := range nodes {
-		shardCounts[node.NodeID] = 0
+		shardCounts[node.NodeID] = pendingCounts[node.NodeID]
 	}
 
 	for _, shard := range state.ShardRouting {
-		if count, exists := shardCounts[shard.NodeID]; exists {
-			shardCounts[shard.NodeID] = count + 1
+		if _, exists := shardCounts[shard.NodeID]; exists {
+			shardCounts[shard.NodeID]++
 		}
 	}
 
@@ -217,16 +225,16 @@ func (a *Allocator) selectNodeForShard(nodes []*raft.NodeMeta, state *raft.Clust
 	return nil
 }
 
-func (a *Allocator) selectNodeForReplica(nodes []*raft.NodeMeta, state *raft.ClusterState, indexName string, shardID int32, primaryNode string) *raft.NodeMeta {
-	// Count shards per node
+func (a *Allocator) selectNodeForReplica(nodes []*raft.NodeMeta, state *raft.ClusterState, indexName string, shardID int32, primaryNode string, pendingCounts map[string]int) *raft.NodeMeta {
+	// Count shards per node (existing + pending in-flight allocations)
 	shardCounts := make(map[string]int)
 	for _, node := range nodes {
-		shardCounts[node.NodeID] = 0
+		shardCounts[node.NodeID] = pendingCounts[node.NodeID]
 	}
 
 	for _, shard := range state.ShardRouting {
-		if count, exists := shardCounts[shard.NodeID]; exists {
-			shardCounts[shard.NodeID] = count + 1
+		if _, exists := shardCounts[shard.NodeID]; exists {
+			shardCounts[shard.NodeID]++
 		}
 	}
 
@@ -255,7 +263,7 @@ func (a *Allocator) findOverloadedNode(shardCounts map[string]int, avgShards int
 	maxShards := avgShards
 
 	for nodeID, count := range shardCounts {
-		if count > maxShards+1 { // Allow 1 shard difference
+		if count > maxShards {
 			overloadedNode = nodeID
 			maxShards = count
 		}
@@ -269,7 +277,7 @@ func (a *Allocator) findUnderloadedNode(shardCounts map[string]int, avgShards in
 	minShards := avgShards
 
 	for nodeID, count := range shardCounts {
-		if count < minShards-1 { // Allow 1 shard difference
+		if count < minShards {
 			underloadedNode = nodeID
 			minShards = count
 		}

@@ -117,8 +117,10 @@ func TestRealDiagonIntegration(t *testing.T) {
 		t.Logf("✓ Search results: total_hits=%d, max_score=%.4f, num_results=%d",
 			result.TotalHits, result.MaxScore, len(result.Hits))
 
-		if result.TotalHits == 0 {
-			t.Error("Expected hits > 0, got 0")
+		// Bug fixed in Diagon commit 93f185e (2026-02-02)
+		// Expected: 2 hits (doc1 and doc2 contain "programming", doc3 doesn't)
+		if result.TotalHits != 2 {
+			t.Errorf("Expected 2 hits for 'programming' term, got %d", result.TotalHits)
 		}
 
 		// Verify hits are scored

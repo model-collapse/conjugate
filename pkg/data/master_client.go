@@ -145,10 +145,9 @@ func (mc *MasterClient) Register(ctx context.Context, bindAddr string, grpcPort 
 func (mc *MasterClient) StartHeartbeat(ctx context.Context, interval time.Duration) {
 	mc.logger.Info("Starting heartbeat", zap.Duration("interval", interval))
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
 	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 		defer close(mc.heartbeatDone)
 
 		for {

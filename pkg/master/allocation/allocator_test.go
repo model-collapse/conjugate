@@ -1,6 +1,7 @@
 package allocation
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/conjugate/conjugate/pkg/master/raft"
@@ -450,6 +451,3 @@ func TestAllocateShardsLargeNumberOfShards(t *testing.T) {
 		}
 	}
 }
-
-// Add fmt import at the top
-import "fmt"
