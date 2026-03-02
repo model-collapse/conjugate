@@ -2,7 +2,10 @@ package data
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"sync"
 	"time"
 
 	pb "github.com/conjugate/conjugate/pkg/common/proto"
@@ -14,11 +17,19 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// aggCacheEntry stores cached aggregation results
+type aggCacheEntry struct {
+	result    map[string]*pb.AggregationResult
+	totalHits int64
+	created   time.Time
+}
+
 // DataService implements the gRPC DataService
 type DataService struct {
 	pb.UnimplementedDataServiceServer
-	node   *DataNode
-	logger *zap.Logger
+	node     *DataNode
+	logger   *zap.Logger
+	aggCache sync.Map // map[string]*aggCacheEntry
 }
 
 // NewDataService creates a new data service
@@ -27,6 +38,12 @@ func NewDataService(node *DataNode, logger *zap.Logger) *DataService {
 		node:   node,
 		logger: logger,
 	}
+}
+
+// aggCacheKey generates a cache key from index + query + aggs
+func aggCacheKey(index string, queryBytes []byte) string {
+	h := sha256.Sum256(append([]byte(index+":"), queryBytes...))
+	return hex.EncodeToString(h[:16])
 }
 
 // CreateShard creates a new shard on this data node
@@ -306,15 +323,19 @@ func (s *DataService) BulkIndex(ctx context.Context, req *pb.BulkIndexRequest) (
 
 	startTime := time.Now()
 
-	// Convert protobuf items to the bulk format expected by shard
+	// Convert raw JSON bytes to the bulk format expected by shard
 	bulkDocs := make([]struct {
-		ID  string
-		Doc map[string]interface{}
+		ID         string
+		Doc        map[string]interface{}
+		SourceJSON []byte
 	}, len(req.Items))
 
 	for i, item := range req.Items {
 		bulkDocs[i].ID = item.DocId
-		bulkDocs[i].Doc = item.Document.AsMap()
+		bulkDocs[i].SourceJSON = item.DocumentJson
+		if err := json.Unmarshal(item.DocumentJson, &bulkDocs[i].Doc); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid JSON in item %d: %v", i, err)
+		}
 	}
 
 	// Use batch bulk index (single lock acquisition, single CGO batch)
@@ -388,6 +409,7 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 			}
 		}
 	}
+	parseTime := time.Since(startTime)
 
 	// Determine max results
 	maxResults := int(req.Size)
@@ -400,28 +422,93 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 		}
 	}
 
-	// Execute search (UDF queries are embedded in req.Query JSON)
-	result, err := shard.Search(ctx, queryBytes, maxResults)
-	if err != nil {
-		s.logger.Error("Search failed", zap.Error(err))
-		return nil, status.Errorf(codes.Internal, "search failed: %v", err)
-	}
-
-	// Compute aggregations locally if push-down definitions are present
+	// Execute search and aggregations
+	searchStart := time.Now()
+	var result *diagon.SearchResult
 	var aggregations map[string]*pb.AggregationResult
-	if len(aggsMap) > 0 && len(result.Hits) > 0 {
-		aggregations = computeDataNodeAggregations(result.Hits, aggsMap)
+
+	// Check aggregation cache for agg-only queries (size=0)
+	// Use req.Query (original bytes including aggs) so different agg definitions
+	// produce different cache keys, even with the same base query.
+	if len(aggsMap) > 0 && req.Size == 0 {
+		cacheKey := aggCacheKey(req.IndexName, req.Query)
+		if cached, ok := s.aggCache.Load(cacheKey); ok {
+			entry := cached.(*aggCacheEntry)
+			// Cache valid for 30s (matches refresh_interval)
+			if time.Since(entry.created) < 30*time.Second {
+				return &pb.SearchResponse{
+					Hits: &pb.SearchHits{
+						Total: &pb.TotalHits{
+							Value:    entry.totalHits,
+							Relation: "eq",
+						},
+					},
+					Aggregations: entry.result,
+				}, nil
+			}
+		}
 	}
 
-	// If no push-down aggs, fall back to Diagon-computed aggregations
-	if aggregations == nil {
+	// Fast path: For aggregation-only queries, try native index-based aggregation
+	// This avoids extracting O(N) documents and instead uses O(unique_terms) index reads
+	if len(aggsMap) > 0 && req.Size == 0 {
+		nativeAggs := computeNativeAggregations(shard.DiagonShard, aggsMap, s.logger)
+		if nativeAggs != nil {
+			// Native aggregation succeeded - no need to search/extract documents
+			aggregations = nativeAggs
+			result = &diagon.SearchResult{
+				TotalHits: int64(shard.DiagonShard.DocCount()),
+			}
+		}
+	}
+
+	// Standard path: search + extract docs (for non-agg queries or unsupported agg types)
+	if result == nil {
+		if len(aggsMap) > 0 && maxResults > 100 {
+			// Aggregation path: use lightweight SearchAndAggregate (no Hit object allocation)
+			aggFields := extractAggregationFields(aggsMap)
+			totalHits, aggDocs, searchErr := shard.DiagonShard.SearchAndAggregate(queryBytes, maxResults, aggFields)
+			if searchErr != nil {
+				s.logger.Error("SearchAndAggregate failed", zap.Error(searchErr))
+				return nil, status.Errorf(codes.Internal, "search failed: %v", searchErr)
+			}
+			result = &diagon.SearchResult{
+				TotalHits: totalHits,
+			}
+			if len(aggDocs) > 0 {
+				aggregations = computeAggregationsFromDocValues(aggDocs, aggsMap)
+			}
+		} else if len(aggsMap) > 0 {
+			aggFields := extractAggregationFields(aggsMap)
+			result, err = shard.SearchFieldsOnly(ctx, queryBytes, maxResults, aggFields)
+			if err != nil {
+				s.logger.Error("Search failed", zap.Error(err))
+				return nil, status.Errorf(codes.Internal, "search failed: %v", err)
+			}
+			if aggregations == nil && len(result.Hits) > 0 {
+				aggregations = computeDataNodeAggregations(result.Hits, aggsMap)
+			}
+		} else {
+			result, err = shard.Search(ctx, queryBytes, maxResults)
+			if err != nil {
+				s.logger.Error("Search failed", zap.Error(err))
+				return nil, status.Errorf(codes.Internal, "search failed: %v", err)
+			}
+		}
+	}
+
+	searchTime := time.Since(searchStart)
+
+	// Fall back to Diagon-computed aggregations if nothing else worked
+	aggStart := time.Now()
+	if aggregations == nil && result != nil {
 		aggregations = convertAggregations(result.Aggregations)
 	}
-
-	tookMillis := time.Since(startTime).Milliseconds()
+	aggTime := time.Since(aggStart)
 
 	// For aggregation-only queries (aggsMap present), skip converting hits to proto
 	// since the coordinator set size=0 and doesn't need document data.
+	convertStart := time.Now()
 	var hits []*pb.SearchHit
 	if len(aggsMap) == 0 {
 		hits = make([]*pb.SearchHit, 0, len(result.Hits))
@@ -437,6 +524,30 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 				Source: docStruct,
 			})
 		}
+	}
+	convertTime := time.Since(convertStart)
+
+	tookMillis := time.Since(startTime).Milliseconds()
+
+	s.logger.Info("Search timing breakdown",
+		zap.String("index", req.IndexName),
+		zap.Int("hits_returned", len(result.Hits)),
+		zap.Int64("total_hits", result.TotalHits),
+		zap.Duration("parse", parseTime),
+		zap.Duration("diagon_search", searchTime),
+		zap.Duration("aggregation", aggTime),
+		zap.Duration("proto_convert", convertTime),
+		zap.Duration("total", time.Since(startTime)),
+		zap.Bool("has_aggs", len(aggsMap) > 0))
+
+	// Cache aggregation results for agg-only queries
+	if len(aggsMap) > 0 && req.Size == 0 && aggregations != nil {
+		cacheKey := aggCacheKey(req.IndexName, req.Query)
+		s.aggCache.Store(cacheKey, &aggCacheEntry{
+			result:    aggregations,
+			totalHits: result.TotalHits,
+			created:   time.Now(),
+		})
 	}
 
 	return &pb.SearchResponse{
@@ -739,4 +850,108 @@ func (s *DataService) ForceMerge(ctx context.Context, req *pb.ForceMergeRequest)
 		SegmentsAfter:  0,
 		DurationMillis: 0,
 	}, nil
+}
+
+// computeNativeAggregations tries to compute aggregations directly from the inverted index.
+// Returns nil if the aggregation type is not supported natively.
+// Supported: terms aggregation (with optional sub-aggs that need doc extraction).
+func computeNativeAggregations(diagonShard *diagon.Shard, aggsMap map[string]interface{}, logger *zap.Logger) map[string]*pb.AggregationResult {
+	results := make(map[string]*pb.AggregationResult)
+
+	for name, aggDef := range aggsMap {
+		aggDefMap, ok := aggDef.(map[string]interface{})
+		if !ok {
+			return nil // Can't handle, fall back
+		}
+
+		for aggType, aggBody := range aggDefMap {
+			if aggType == "aggs" {
+				continue
+			}
+			bodyMap, ok := aggBody.(map[string]interface{})
+			if !ok {
+				return nil
+			}
+
+			switch aggType {
+			case "terms":
+				field, _ := bodyMap["field"].(string)
+				size := 10
+				if s, ok := bodyMap["size"].(float64); ok {
+					size = int(s)
+				}
+				// Check for sub-aggregations - if present, fall back to doc extraction
+				if _, hasSub := aggDefMap["aggs"]; hasSub {
+					return nil // Can't do sub-aggs natively yet
+				}
+				buckets, err := diagonShard.ComputeTermsAgg(field, size)
+				if err != nil || buckets == nil {
+					logger.Debug("Native terms agg failed",
+						zap.String("name", name),
+						zap.String("field", field),
+						zap.Error(err))
+					return nil
+				}
+				pbBuckets := make([]*pb.AggregationBucket, len(buckets))
+				for i, b := range buckets {
+					pbBuckets[i] = &pb.AggregationBucket{
+						Key:      b.Key,
+						DocCount: b.DocCount,
+					}
+				}
+				results[name] = &pb.AggregationResult{
+					Type:    "terms",
+					Buckets: pbBuckets,
+				}
+
+			case "date_histogram":
+				return nil // Not supported natively, fall back to doc extraction
+
+			default:
+				return nil
+			}
+		}
+	}
+
+	if len(results) == 0 {
+		return nil
+	}
+	return results
+}
+
+// extractAggregationFields extracts the list of field names needed by aggregation definitions.
+// Used to enable field-only extraction mode (skip _source JSON parsing).
+func extractAggregationFields(aggsMap map[string]interface{}) []string {
+	fieldSet := make(map[string]bool)
+	extractFieldsRecursive(aggsMap, fieldSet)
+	fields := make([]string, 0, len(fieldSet))
+	for f := range fieldSet {
+		fields = append(fields, f)
+	}
+	return fields
+}
+
+func extractFieldsRecursive(aggsMap map[string]interface{}, fieldSet map[string]bool) {
+	for _, aggDef := range aggsMap {
+		aggDefMap, ok := aggDef.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for aggType, aggBody := range aggDefMap {
+			if aggType == "aggs" {
+				// Recurse into sub-aggregations
+				if subAggs, ok := aggBody.(map[string]interface{}); ok {
+					extractFieldsRecursive(subAggs, fieldSet)
+				}
+				continue
+			}
+			bodyMap, ok := aggBody.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if field, ok := bodyMap["field"].(string); ok {
+				fieldSet[field] = true
+			}
+		}
+	}
 }

@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -459,8 +460,9 @@ func (s *Shard) IndexDocument(ctx context.Context, docID string, doc map[string]
 // This is significantly faster than calling IndexDocument repeatedly because it
 // reduces CGO overhead and lock contention.
 func (s *Shard) BulkIndexDocuments(ctx context.Context, docs []struct {
-	ID  string
-	Doc map[string]interface{}
+	ID         string
+	Doc        map[string]interface{}
+	SourceJSON []byte
 }) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -693,8 +695,9 @@ func (s *Shard) GetBatchStats() map[string]interface{} {
 	}
 }
 
-// Search executes a search query on the shard
-func (s *Shard) Search(ctx context.Context, query []byte) (*diagon.SearchResult, error) {
+// SearchFieldsOnly executes a search extracting only specific fields (no _source parsing).
+// Much faster for aggregation-only queries.
+func (s *Shard) SearchFieldsOnly(ctx context.Context, query []byte, maxResults int, fields []string) (*diagon.SearchResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -702,19 +705,45 @@ func (s *Shard) Search(ctx context.Context, query []byte) (*diagon.SearchResult,
 		return nil, fmt.Errorf("shard is not ready")
 	}
 
-	// Execute search using Diagon (pass empty filterExpression)
-	result, err := s.DiagonShard.Search(query, nil)
+	if maxResults <= 0 {
+		maxResults = 100
+	}
+
+	result, err := s.DiagonShard.SearchFieldsOnly(query, nil, maxResults, fields)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute search: %w", err)
 	}
 
-	s.logger.Debug("Executed search",
-		zap.Int64("total_hits", result.TotalHits),
-		zap.Int("num_hits", len(result.Hits)))
+	return result, nil
+}
 
-	// Apply WASM UDF filtering if query contains UDF
+// Search executes a search query on the shard
+func (s *Shard) Search(ctx context.Context, query []byte, maxResults int) (*diagon.SearchResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.State != ShardStateStarted {
+		return nil, fmt.Errorf("shard is not ready")
+	}
+
+	if maxResults <= 0 {
+		maxResults = 100
+	}
+
+	// Check for WASM UDF query BEFORE passing to Diagon (Diagon doesn't support wasm_udf type)
 	if s.udfFilter != nil && s.udfFilter.HasWasmUDFQuery(query) {
-		s.logger.Debug("Applying WASM UDF filter")
+		s.logger.Debug("Detected WASM UDF query, using match_all for Diagon search")
+
+		// For UDF queries, run a match_all through Diagon first to get candidate documents
+		diagonQuery := extractDiagonQuery(query)
+
+		result, err := s.DiagonShard.SearchWithLimit(diagonQuery, nil, maxResults)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute search: %w", err)
+		}
+
+		s.logger.Debug("Applying WASM UDF filter",
+			zap.Int64("candidate_hits", result.TotalHits))
 
 		filteredResult, err := s.udfFilter.FilterResults(ctx, query, result)
 		if err != nil {
@@ -728,6 +757,16 @@ func (s *Shard) Search(ctx context.Context, query []byte) (*diagon.SearchResult,
 
 		return filteredResult, nil
 	}
+
+	// Execute search using Diagon (pass empty filterExpression)
+	result, err := s.DiagonShard.SearchWithLimit(query, nil, maxResults)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute search: %w", err)
+	}
+
+	s.logger.Debug("Executed search",
+		zap.Int64("total_hits", result.TotalHits),
+		zap.Int("num_hits", len(result.Hits)))
 
 	return result, nil
 }
@@ -947,4 +986,61 @@ func (s *Shard) ForceMerge(maxSegments int) error {
 		zap.Int32("shard_id", s.ShardID))
 
 	return nil
+}
+
+// extractDiagonQuery extracts the Diagon-compatible portion of a query.
+// If the query is a standalone wasm_udf, returns match_all.
+// If it's a bool query with wasm_udf in filter, returns the bool query without the UDF clauses.
+func extractDiagonQuery(queryJSON []byte) []byte {
+	var queryMap map[string]interface{}
+	if err := json.Unmarshal(queryJSON, &queryMap); err != nil {
+		// Fallback to match_all on parse error
+		return []byte(`{"match_all": {}}`)
+	}
+
+	// Standalone wasm_udf query → replace with match_all
+	if _, ok := queryMap["wasm_udf"]; ok {
+		return []byte(`{"match_all": {}}`)
+	}
+
+	// Bool query with wasm_udf in filter/must → strip UDF clauses, keep the rest
+	if boolMap, ok := queryMap["bool"].(map[string]interface{}); ok {
+		stripped := stripUDFClauses(boolMap)
+		// If nothing left after stripping, use match_all
+		if len(stripped) == 0 {
+			return []byte(`{"match_all": {}}`)
+		}
+		result, err := json.Marshal(map[string]interface{}{"bool": stripped})
+		if err != nil {
+			return []byte(`{"match_all": {}}`)
+		}
+		return result
+	}
+
+	// No UDF found, return as-is
+	return queryJSON
+}
+
+// stripUDFClauses removes wasm_udf entries from bool query clause arrays.
+func stripUDFClauses(boolMap map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+	for key, val := range boolMap {
+		if clauses, ok := val.([]interface{}); ok {
+			filtered := make([]interface{}, 0, len(clauses))
+			for _, clause := range clauses {
+				if clauseMap, ok := clause.(map[string]interface{}); ok {
+					if _, hasUDF := clauseMap["wasm_udf"]; hasUDF {
+						continue // skip UDF clauses
+					}
+				}
+				filtered = append(filtered, clause)
+			}
+			if len(filtered) > 0 {
+				result[key] = filtered
+			}
+		} else {
+			result[key] = val
+		}
+	}
+	return result
 }

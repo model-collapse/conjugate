@@ -351,7 +351,7 @@ type ShardInfo struct {
 	IndexName     string                 `protobuf:"bytes,1,opt,name=index_name,json=indexName,proto3" json:"index_name,omitempty"`
 	ShardId       int32                  `protobuf:"varint,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
 	IsPrimary     bool                   `protobuf:"varint,3,opt,name=is_primary,json=isPrimary,proto3" json:"is_primary,omitempty"`
-	State         ShardInfo_ShardState   `protobuf:"varint,4,opt,name=state,proto3,enum=quidditch.data.ShardInfo_ShardState" json:"state,omitempty"`
+	State         ShardInfo_ShardState   `protobuf:"varint,4,opt,name=state,proto3,enum=conjugate.data.ShardInfo_ShardState" json:"state,omitempty"`
 	DocsCount     int64                  `protobuf:"varint,5,opt,name=docs_count,json=docsCount,proto3" json:"docs_count,omitempty"`
 	SizeBytes     int64                  `protobuf:"varint,6,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
@@ -1069,7 +1069,7 @@ func (x *BulkIndexRequest) GetItems() []*BulkIndexItem {
 type BulkIndexItem struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DocId         string                 `protobuf:"bytes,1,opt,name=doc_id,json=docId,proto3" json:"doc_id,omitempty"`
-	Document      *structpb.Struct       `protobuf:"bytes,2,opt,name=document,proto3" json:"document,omitempty"`
+	DocumentJson  []byte                 `protobuf:"bytes,2,opt,name=document_json,json=documentJson,proto3" json:"document_json,omitempty"` // Raw JSON bytes pass-through
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1111,9 +1111,9 @@ func (x *BulkIndexItem) GetDocId() string {
 	return ""
 }
 
-func (x *BulkIndexItem) GetDocument() *structpb.Struct {
+func (x *BulkIndexItem) GetDocumentJson() []byte {
 	if x != nil {
-		return x.Document
+		return x.DocumentJson
 	}
 	return nil
 }
@@ -1656,8 +1656,8 @@ func (x *SearchHit) GetSort() []float64 {
 
 type AggregationResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Type  string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"` // terms, stats, histogram, date_histogram, percentiles, cardinality, extended_stats
-	// Terms aggregation
+	Type  string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"` // terms, stats, histogram, date_histogram, percentiles, cardinality, extended_stats, avg, min, max, sum, value_count, range, filters
+	// Terms aggregation, Range aggregation, Filters aggregation
 	Buckets []*AggregationBucket `protobuf:"bytes,2,rep,name=buckets,proto3" json:"buckets,omitempty"`
 	// Stats/Extended Stats aggregation
 	Count                   int64   `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
@@ -1808,12 +1808,15 @@ func (x *AggregationResult) GetValue() int64 {
 
 type AggregationBucket struct {
 	state           protoimpl.MessageState        `protogen:"open.v1"`
-	Key             string                        `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`                                   // For terms, date histogram key_as_string
+	Key             string                        `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`                                   // For terms, date histogram key_as_string, range
 	NumericKey      float64                       `protobuf:"fixed64,2,opt,name=numeric_key,json=numericKey,proto3" json:"numeric_key,omitempty"` // For histogram, date histogram timestamp
 	DocCount        int64                         `protobuf:"varint,3,opt,name=doc_count,json=docCount,proto3" json:"doc_count,omitempty"`
 	SubAggregations map[string]*AggregationResult `protobuf:"bytes,4,rep,name=sub_aggregations,json=subAggregations,proto3" json:"sub_aggregations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // For nested aggregations
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Range aggregation fields
+	From          *float64 `protobuf:"fixed64,5,opt,name=from,proto3,oneof" json:"from,omitempty"` // Lower bound for range (omitted if unbounded)
+	To            *float64 `protobuf:"fixed64,6,opt,name=to,proto3,oneof" json:"to,omitempty"`     // Upper bound for range (omitted if unbounded)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AggregationBucket) Reset() {
@@ -1872,6 +1875,20 @@ func (x *AggregationBucket) GetSubAggregations() map[string]*AggregationResult {
 		return x.SubAggregations
 	}
 	return nil
+}
+
+func (x *AggregationBucket) GetFrom() float64 {
+	if x != nil && x.From != nil {
+		return *x.From
+	}
+	return 0
+}
+
+func (x *AggregationBucket) GetTo() float64 {
+	if x != nil && x.To != nil {
+		return *x.To
+	}
+	return 0
 }
 
 type CountRequest struct {
@@ -2050,6 +2067,8 @@ type ShardStats struct {
 	SearchQueriesTimeMillis int64                  `protobuf:"varint,8,opt,name=search_queries_time_millis,json=searchQueriesTimeMillis,proto3" json:"search_queries_time_millis,omitempty"`
 	IndexingTotal           int64                  `protobuf:"varint,9,opt,name=indexing_total,json=indexingTotal,proto3" json:"indexing_total,omitempty"`
 	IndexingTimeMillis      int64                  `protobuf:"varint,10,opt,name=indexing_time_millis,json=indexingTimeMillis,proto3" json:"indexing_time_millis,omitempty"`
+	SegmentCount            int32                  `protobuf:"varint,11,opt,name=segment_count,json=segmentCount,proto3" json:"segment_count,omitempty"` // Number of Lucene segments
+	MaxDoc                  int64                  `protobuf:"varint,12,opt,name=max_doc,json=maxDoc,proto3" json:"max_doc,omitempty"`                   // Maximum document ID
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -2150,6 +2169,20 @@ func (x *ShardStats) GetIndexingTotal() int64 {
 func (x *ShardStats) GetIndexingTimeMillis() int64 {
 	if x != nil {
 		return x.IndexingTimeMillis
+	}
+	return 0
+}
+
+func (x *ShardStats) GetSegmentCount() int32 {
+	if x != nil {
+		return x.SegmentCount
+	}
+	return 0
+}
+
+func (x *ShardStats) GetMaxDoc() int64 {
+	if x != nil {
+		return x.MaxDoc
 	}
 	return 0
 }
@@ -2306,18 +2339,154 @@ func (x *DataNodeStats) GetShards() []*ShardStats {
 	return nil
 }
 
+type ForceMergeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	IndexName     string                 `protobuf:"bytes,1,opt,name=index_name,json=indexName,proto3" json:"index_name,omitempty"`
+	ShardId       int32                  `protobuf:"varint,2,opt,name=shard_id,json=shardId,proto3" json:"shard_id,omitempty"`
+	MaxSegments   int32                  `protobuf:"varint,3,opt,name=max_segments,json=maxSegments,proto3" json:"max_segments,omitempty"` // Target number of segments (1 = full optimization)
+	Flush         bool                   `protobuf:"varint,4,opt,name=flush,proto3" json:"flush,omitempty"`                                // Flush before merge (default: true)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForceMergeRequest) Reset() {
+	*x = ForceMergeRequest{}
+	mi := &file_pkg_common_proto_data_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForceMergeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForceMergeRequest) ProtoMessage() {}
+
+func (x *ForceMergeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_common_proto_data_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForceMergeRequest.ProtoReflect.Descriptor instead.
+func (*ForceMergeRequest) Descriptor() ([]byte, []int) {
+	return file_pkg_common_proto_data_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *ForceMergeRequest) GetIndexName() string {
+	if x != nil {
+		return x.IndexName
+	}
+	return ""
+}
+
+func (x *ForceMergeRequest) GetShardId() int32 {
+	if x != nil {
+		return x.ShardId
+	}
+	return 0
+}
+
+func (x *ForceMergeRequest) GetMaxSegments() int32 {
+	if x != nil {
+		return x.MaxSegments
+	}
+	return 0
+}
+
+func (x *ForceMergeRequest) GetFlush() bool {
+	if x != nil {
+		return x.Flush
+	}
+	return false
+}
+
+type ForceMergeResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Acknowledged   bool                   `protobuf:"varint,1,opt,name=acknowledged,proto3" json:"acknowledged,omitempty"`
+	SegmentsBefore int32                  `protobuf:"varint,2,opt,name=segments_before,json=segmentsBefore,proto3" json:"segments_before,omitempty"` // Segment count before merge
+	SegmentsAfter  int32                  `protobuf:"varint,3,opt,name=segments_after,json=segmentsAfter,proto3" json:"segments_after,omitempty"`    // Segment count after merge
+	DurationMillis int64                  `protobuf:"varint,4,opt,name=duration_millis,json=durationMillis,proto3" json:"duration_millis,omitempty"` // Time taken for merge
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ForceMergeResponse) Reset() {
+	*x = ForceMergeResponse{}
+	mi := &file_pkg_common_proto_data_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForceMergeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForceMergeResponse) ProtoMessage() {}
+
+func (x *ForceMergeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_pkg_common_proto_data_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForceMergeResponse.ProtoReflect.Descriptor instead.
+func (*ForceMergeResponse) Descriptor() ([]byte, []int) {
+	return file_pkg_common_proto_data_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ForceMergeResponse) GetAcknowledged() bool {
+	if x != nil {
+		return x.Acknowledged
+	}
+	return false
+}
+
+func (x *ForceMergeResponse) GetSegmentsBefore() int32 {
+	if x != nil {
+		return x.SegmentsBefore
+	}
+	return 0
+}
+
+func (x *ForceMergeResponse) GetSegmentsAfter() int32 {
+	if x != nil {
+		return x.SegmentsAfter
+	}
+	return 0
+}
+
+func (x *ForceMergeResponse) GetDurationMillis() int64 {
+	if x != nil {
+		return x.DurationMillis
+	}
+	return 0
+}
+
 var File_pkg_common_proto_data_proto protoreflect.FileDescriptor
 
 const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\n" +
-	"\x1bpkg/common/proto/data.proto\x12\x0equidditch.data\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf8\x01\n" +
+	"\x1bpkg/common/proto/data.proto\x12\x0econjugate.data\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf8\x01\n" +
 	"\x12CreateShardRequest\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12\x19\n" +
 	"\bshard_id\x18\x02 \x01(\x05R\ashardId\x12\x1d\n" +
 	"\n" +
 	"is_primary\x18\x03 \x01(\bR\tisPrimary\x12L\n" +
-	"\bsettings\x18\x04 \x03(\v20.quidditch.data.CreateShardRequest.SettingsEntryR\bsettings\x1a;\n" +
+	"\bsettings\x18\x04 \x03(\v20.conjugate.data.CreateShardRequest.SettingsEntryR\bsettings\x1a;\n" +
 	"\rSettingsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"V\n" +
@@ -2340,7 +2509,7 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\bshard_id\x18\x02 \x01(\x05R\ashardId\x12\x1d\n" +
 	"\n" +
 	"is_primary\x18\x03 \x01(\bR\tisPrimary\x12:\n" +
-	"\x05state\x18\x04 \x01(\x0e2$.quidditch.data.ShardInfo.ShardStateR\x05state\x12\x1d\n" +
+	"\x05state\x18\x04 \x01(\x0e2$.conjugate.data.ShardInfo.ShardStateR\x05state\x12\x1d\n" +
 	"\n" +
 	"docs_count\x18\x05 \x01(\x03R\tdocsCount\x12\x1d\n" +
 	"\n" +
@@ -2399,14 +2568,14 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12\x19\n" +
 	"\bshard_id\x18\x02 \x01(\x05R\ashardId\x123\n" +
-	"\x05items\x18\x03 \x03(\v2\x1d.quidditch.data.BulkIndexItemR\x05items\"[\n" +
+	"\x05items\x18\x03 \x03(\v2\x1d.conjugate.data.BulkIndexItemR\x05items\"K\n" +
 	"\rBulkIndexItem\x12\x15\n" +
-	"\x06doc_id\x18\x01 \x01(\tR\x05docId\x123\n" +
-	"\bdocument\x18\x02 \x01(\v2\x17.google.protobuf.StructR\bdocument\"\x90\x01\n" +
+	"\x06doc_id\x18\x01 \x01(\tR\x05docId\x12#\n" +
+	"\rdocument_json\x18\x02 \x01(\fR\fdocumentJson\"\x90\x01\n" +
 	"\x11BulkIndexResponse\x12\x1d\n" +
 	"\n" +
 	"has_errors\x18\x01 \x01(\bR\thasErrors\x12;\n" +
-	"\x05items\x18\x02 \x03(\v2%.quidditch.data.BulkIndexItemResponseR\x05items\x12\x1f\n" +
+	"\x05items\x18\x02 \x03(\v2%.conjugate.data.BulkIndexItemResponseR\x05items\x12\x1f\n" +
 	"\vtook_millis\x18\x03 \x01(\x03R\n" +
 	"tookMillis\"h\n" +
 	"\x15BulkIndexItemResponse\x12\"\n" +
@@ -2427,12 +2596,12 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\vtook_millis\x18\x01 \x01(\x03R\n" +
 	"tookMillis\x12\x1b\n" +
 	"\ttimed_out\x18\x02 \x01(\bR\btimedOut\x128\n" +
-	"\x06shards\x18\x03 \x01(\v2 .quidditch.data.ShardSearchStatsR\x06shards\x12.\n" +
-	"\x04hits\x18\x04 \x01(\v2\x1a.quidditch.data.SearchHitsR\x04hits\x12T\n" +
-	"\faggregations\x18\x05 \x03(\v20.quidditch.data.SearchResponse.AggregationsEntryR\faggregations\x1ab\n" +
+	"\x06shards\x18\x03 \x01(\v2 .conjugate.data.ShardSearchStatsR\x06shards\x12.\n" +
+	"\x04hits\x18\x04 \x01(\v2\x1a.conjugate.data.SearchHitsR\x04hits\x12T\n" +
+	"\faggregations\x18\x05 \x03(\v20.conjugate.data.SearchResponse.AggregationsEntryR\faggregations\x1ab\n" +
 	"\x11AggregationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x127\n" +
-	"\x05value\x18\x02 \x01(\v2!.quidditch.data.AggregationResultR\x05value:\x028\x01\"`\n" +
+	"\x05value\x18\x02 \x01(\v2!.conjugate.data.AggregationResultR\x05value:\x028\x01\"`\n" +
 	"\x10ShardSearchStats\x12\x14\n" +
 	"\x05total\x18\x01 \x01(\x05R\x05total\x12\x1e\n" +
 	"\n" +
@@ -2441,9 +2610,9 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\x06failed\x18\x03 \x01(\x05R\x06failed\"\x89\x01\n" +
 	"\n" +
 	"SearchHits\x12/\n" +
-	"\x05total\x18\x01 \x01(\v2\x19.quidditch.data.TotalHitsR\x05total\x12\x1b\n" +
+	"\x05total\x18\x01 \x01(\v2\x19.conjugate.data.TotalHitsR\x05total\x12\x1b\n" +
 	"\tmax_score\x18\x02 \x01(\x01R\bmaxScore\x12-\n" +
-	"\x04hits\x18\x03 \x03(\v2\x19.quidditch.data.SearchHitR\x04hits\"=\n" +
+	"\x04hits\x18\x03 \x03(\v2\x19.conjugate.data.SearchHitR\x04hits\"=\n" +
 	"\tTotalHits\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\x03R\x05value\x12\x1a\n" +
 	"\brelation\x18\x02 \x01(\tR\brelation\"v\n" +
@@ -2454,7 +2623,7 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\x04sort\x18\x04 \x03(\x01R\x04sort\"\xbb\x04\n" +
 	"\x11AggregationResult\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12;\n" +
-	"\abuckets\x18\x02 \x03(\v2!.quidditch.data.AggregationBucketR\abuckets\x12\x14\n" +
+	"\abuckets\x18\x02 \x03(\v2!.conjugate.data.AggregationBucketR\abuckets\x12\x14\n" +
 	"\x05count\x18\x03 \x01(\x03R\x05count\x12\x10\n" +
 	"\x03min\x18\x04 \x01(\x01R\x03min\x12\x10\n" +
 	"\x03max\x18\x05 \x01(\x01R\x03max\x12\x10\n" +
@@ -2466,20 +2635,24 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	" \x01(\x01R\fstdDeviation\x12;\n" +
 	"\x1astd_deviation_bounds_upper\x18\v \x01(\x01R\x17stdDeviationBoundsUpper\x12;\n" +
 	"\x1astd_deviation_bounds_lower\x18\f \x01(\x01R\x17stdDeviationBoundsLower\x12E\n" +
-	"\x06values\x18\r \x03(\v2-.quidditch.data.AggregationResult.ValuesEntryR\x06values\x12\x14\n" +
+	"\x06values\x18\r \x03(\v2-.conjugate.data.AggregationResult.ValuesEntryR\x06values\x12\x14\n" +
 	"\x05value\x18\x0e \x01(\x03R\x05value\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xad\x02\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xeb\x02\n" +
 	"\x11AggregationBucket\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1f\n" +
 	"\vnumeric_key\x18\x02 \x01(\x01R\n" +
 	"numericKey\x12\x1b\n" +
 	"\tdoc_count\x18\x03 \x01(\x03R\bdocCount\x12a\n" +
-	"\x10sub_aggregations\x18\x04 \x03(\v26.quidditch.data.AggregationBucket.SubAggregationsEntryR\x0fsubAggregations\x1ae\n" +
+	"\x10sub_aggregations\x18\x04 \x03(\v26.conjugate.data.AggregationBucket.SubAggregationsEntryR\x0fsubAggregations\x12\x17\n" +
+	"\x04from\x18\x05 \x01(\x01H\x00R\x04from\x88\x01\x01\x12\x13\n" +
+	"\x02to\x18\x06 \x01(\x01H\x01R\x02to\x88\x01\x01\x1ae\n" +
 	"\x14SubAggregationsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x127\n" +
-	"\x05value\x18\x02 \x01(\v2!.quidditch.data.AggregationResultR\x05value:\x028\x01\"\x8b\x01\n" +
+	"\x05value\x18\x02 \x01(\v2!.conjugate.data.AggregationResultR\x05value:\x028\x01B\a\n" +
+	"\x05_fromB\x05\n" +
+	"\x03_to\"\x8b\x01\n" +
 	"\fCountRequest\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12\x19\n" +
@@ -2491,7 +2664,7 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\x14GetShardStatsRequest\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12\x19\n" +
-	"\bshard_id\x18\x02 \x01(\x05R\ashardId\"\x8e\x03\n" +
+	"\bshard_id\x18\x02 \x01(\x05R\ashardId\"\xcc\x03\n" +
 	"\n" +
 	"ShardStats\x12\x1d\n" +
 	"\n" +
@@ -2508,7 +2681,9 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\x1asearch_queries_time_millis\x18\b \x01(\x03R\x17searchQueriesTimeMillis\x12%\n" +
 	"\x0eindexing_total\x18\t \x01(\x03R\rindexingTotal\x120\n" +
 	"\x14indexing_time_millis\x18\n" +
-	" \x01(\x03R\x12indexingTimeMillis\"<\n" +
+	" \x01(\x03R\x12indexingTimeMillis\x12#\n" +
+	"\rsegment_count\x18\v \x01(\x05R\fsegmentCount\x12\x17\n" +
+	"\amax_doc\x18\f \x01(\x03R\x06maxDoc\"<\n" +
 	"\x13GetNodeStatsRequest\x12%\n" +
 	"\x0einclude_shards\x18\x01 \x01(\bR\rincludeShards\"\xfb\x02\n" +
 	"\rDataNodeStats\x12\x17\n" +
@@ -2521,22 +2696,35 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\x14memory_usage_percent\x18\x06 \x01(\x01R\x12memoryUsagePercent\x12,\n" +
 	"\x12disk_usage_percent\x18\a \x01(\x01R\x10diskUsagePercent\x12%\n" +
 	"\x0euptime_seconds\x18\b \x01(\x03R\ruptimeSeconds\x122\n" +
-	"\x06shards\x18\t \x03(\v2\x1a.quidditch.data.ShardStatsR\x06shards2\xdc\b\n" +
-	"\vDataService\x12V\n" +
-	"\vCreateShard\x12\".quidditch.data.CreateShardRequest\x1a#.quidditch.data.CreateShardResponse\x12V\n" +
-	"\vDeleteShard\x12\".quidditch.data.DeleteShardRequest\x1a#.quidditch.data.DeleteShardResponse\x12N\n" +
-	"\fGetShardInfo\x12#.quidditch.data.GetShardInfoRequest\x1a\x19.quidditch.data.ShardInfo\x12Y\n" +
-	"\fRefreshShard\x12#.quidditch.data.RefreshShardRequest\x1a$.quidditch.data.RefreshShardResponse\x12S\n" +
+	"\x06shards\x18\t \x03(\v2\x1a.conjugate.data.ShardStatsR\x06shards\"\x86\x01\n" +
+	"\x11ForceMergeRequest\x12\x1d\n" +
 	"\n" +
-	"FlushShard\x12!.quidditch.data.FlushShardRequest\x1a\".quidditch.data.FlushShardResponse\x12\\\n" +
-	"\rIndexDocument\x12$.quidditch.data.IndexDocumentRequest\x1a%.quidditch.data.IndexDocumentResponse\x12V\n" +
-	"\vGetDocument\x12\".quidditch.data.GetDocumentRequest\x1a#.quidditch.data.GetDocumentResponse\x12_\n" +
-	"\x0eDeleteDocument\x12%.quidditch.data.DeleteDocumentRequest\x1a&.quidditch.data.DeleteDocumentResponse\x12P\n" +
-	"\tBulkIndex\x12 .quidditch.data.BulkIndexRequest\x1a!.quidditch.data.BulkIndexResponse\x12G\n" +
-	"\x06Search\x12\x1d.quidditch.data.SearchRequest\x1a\x1e.quidditch.data.SearchResponse\x12D\n" +
-	"\x05Count\x12\x1c.quidditch.data.CountRequest\x1a\x1d.quidditch.data.CountResponse\x12Q\n" +
-	"\rGetShardStats\x12$.quidditch.data.GetShardStatsRequest\x1a\x1a.quidditch.data.ShardStats\x12R\n" +
-	"\fGetNodeStats\x12#.quidditch.data.GetNodeStatsRequest\x1a\x1d.quidditch.data.DataNodeStatsB1Z/github.com/conjugate/conjugate/pkg/common/protob\x06proto3"
+	"index_name\x18\x01 \x01(\tR\tindexName\x12\x19\n" +
+	"\bshard_id\x18\x02 \x01(\x05R\ashardId\x12!\n" +
+	"\fmax_segments\x18\x03 \x01(\x05R\vmaxSegments\x12\x14\n" +
+	"\x05flush\x18\x04 \x01(\bR\x05flush\"\xb1\x01\n" +
+	"\x12ForceMergeResponse\x12\"\n" +
+	"\facknowledged\x18\x01 \x01(\bR\facknowledged\x12'\n" +
+	"\x0fsegments_before\x18\x02 \x01(\x05R\x0esegmentsBefore\x12%\n" +
+	"\x0esegments_after\x18\x03 \x01(\x05R\rsegmentsAfter\x12'\n" +
+	"\x0fduration_millis\x18\x04 \x01(\x03R\x0edurationMillis2\xb1\t\n" +
+	"\vDataService\x12V\n" +
+	"\vCreateShard\x12\".conjugate.data.CreateShardRequest\x1a#.conjugate.data.CreateShardResponse\x12V\n" +
+	"\vDeleteShard\x12\".conjugate.data.DeleteShardRequest\x1a#.conjugate.data.DeleteShardResponse\x12N\n" +
+	"\fGetShardInfo\x12#.conjugate.data.GetShardInfoRequest\x1a\x19.conjugate.data.ShardInfo\x12Y\n" +
+	"\fRefreshShard\x12#.conjugate.data.RefreshShardRequest\x1a$.conjugate.data.RefreshShardResponse\x12S\n" +
+	"\n" +
+	"FlushShard\x12!.conjugate.data.FlushShardRequest\x1a\".conjugate.data.FlushShardResponse\x12\\\n" +
+	"\rIndexDocument\x12$.conjugate.data.IndexDocumentRequest\x1a%.conjugate.data.IndexDocumentResponse\x12V\n" +
+	"\vGetDocument\x12\".conjugate.data.GetDocumentRequest\x1a#.conjugate.data.GetDocumentResponse\x12_\n" +
+	"\x0eDeleteDocument\x12%.conjugate.data.DeleteDocumentRequest\x1a&.conjugate.data.DeleteDocumentResponse\x12P\n" +
+	"\tBulkIndex\x12 .conjugate.data.BulkIndexRequest\x1a!.conjugate.data.BulkIndexResponse\x12G\n" +
+	"\x06Search\x12\x1d.conjugate.data.SearchRequest\x1a\x1e.conjugate.data.SearchResponse\x12D\n" +
+	"\x05Count\x12\x1c.conjugate.data.CountRequest\x1a\x1d.conjugate.data.CountResponse\x12Q\n" +
+	"\rGetShardStats\x12$.conjugate.data.GetShardStatsRequest\x1a\x1a.conjugate.data.ShardStats\x12R\n" +
+	"\fGetNodeStats\x12#.conjugate.data.GetNodeStatsRequest\x1a\x1d.conjugate.data.DataNodeStats\x12S\n" +
+	"\n" +
+	"ForceMerge\x12!.conjugate.data.ForceMergeRequest\x1a\".conjugate.data.ForceMergeResponseB1Z/github.com/conjugate/conjugate/pkg/common/protob\x06proto3"
 
 var (
 	file_pkg_common_proto_data_proto_rawDescOnce sync.Once
@@ -2551,103 +2739,106 @@ func file_pkg_common_proto_data_proto_rawDescGZIP() []byte {
 }
 
 var file_pkg_common_proto_data_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_pkg_common_proto_data_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
+var file_pkg_common_proto_data_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
 var file_pkg_common_proto_data_proto_goTypes = []any{
-	(ShardInfo_ShardState)(0),      // 0: quidditch.data.ShardInfo.ShardState
-	(*CreateShardRequest)(nil),     // 1: quidditch.data.CreateShardRequest
-	(*CreateShardResponse)(nil),    // 2: quidditch.data.CreateShardResponse
-	(*DeleteShardRequest)(nil),     // 3: quidditch.data.DeleteShardRequest
-	(*DeleteShardResponse)(nil),    // 4: quidditch.data.DeleteShardResponse
-	(*GetShardInfoRequest)(nil),    // 5: quidditch.data.GetShardInfoRequest
-	(*ShardInfo)(nil),              // 6: quidditch.data.ShardInfo
-	(*RefreshShardRequest)(nil),    // 7: quidditch.data.RefreshShardRequest
-	(*RefreshShardResponse)(nil),   // 8: quidditch.data.RefreshShardResponse
-	(*FlushShardRequest)(nil),      // 9: quidditch.data.FlushShardRequest
-	(*FlushShardResponse)(nil),     // 10: quidditch.data.FlushShardResponse
-	(*IndexDocumentRequest)(nil),   // 11: quidditch.data.IndexDocumentRequest
-	(*IndexDocumentResponse)(nil),  // 12: quidditch.data.IndexDocumentResponse
-	(*GetDocumentRequest)(nil),     // 13: quidditch.data.GetDocumentRequest
-	(*GetDocumentResponse)(nil),    // 14: quidditch.data.GetDocumentResponse
-	(*DeleteDocumentRequest)(nil),  // 15: quidditch.data.DeleteDocumentRequest
-	(*DeleteDocumentResponse)(nil), // 16: quidditch.data.DeleteDocumentResponse
-	(*BulkIndexRequest)(nil),       // 17: quidditch.data.BulkIndexRequest
-	(*BulkIndexItem)(nil),          // 18: quidditch.data.BulkIndexItem
-	(*BulkIndexResponse)(nil),      // 19: quidditch.data.BulkIndexResponse
-	(*BulkIndexItemResponse)(nil),  // 20: quidditch.data.BulkIndexItemResponse
-	(*SearchRequest)(nil),          // 21: quidditch.data.SearchRequest
-	(*SearchResponse)(nil),         // 22: quidditch.data.SearchResponse
-	(*ShardSearchStats)(nil),       // 23: quidditch.data.ShardSearchStats
-	(*SearchHits)(nil),             // 24: quidditch.data.SearchHits
-	(*TotalHits)(nil),              // 25: quidditch.data.TotalHits
-	(*SearchHit)(nil),              // 26: quidditch.data.SearchHit
-	(*AggregationResult)(nil),      // 27: quidditch.data.AggregationResult
-	(*AggregationBucket)(nil),      // 28: quidditch.data.AggregationBucket
-	(*CountRequest)(nil),           // 29: quidditch.data.CountRequest
-	(*CountResponse)(nil),          // 30: quidditch.data.CountResponse
-	(*GetShardStatsRequest)(nil),   // 31: quidditch.data.GetShardStatsRequest
-	(*ShardStats)(nil),             // 32: quidditch.data.ShardStats
-	(*GetNodeStatsRequest)(nil),    // 33: quidditch.data.GetNodeStatsRequest
-	(*DataNodeStats)(nil),          // 34: quidditch.data.DataNodeStats
-	nil,                            // 35: quidditch.data.CreateShardRequest.SettingsEntry
-	nil,                            // 36: quidditch.data.SearchResponse.AggregationsEntry
-	nil,                            // 37: quidditch.data.AggregationResult.ValuesEntry
-	nil,                            // 38: quidditch.data.AggregationBucket.SubAggregationsEntry
-	(*timestamppb.Timestamp)(nil),  // 39: google.protobuf.Timestamp
-	(*structpb.Struct)(nil),        // 40: google.protobuf.Struct
+	(ShardInfo_ShardState)(0),      // 0: conjugate.data.ShardInfo.ShardState
+	(*CreateShardRequest)(nil),     // 1: conjugate.data.CreateShardRequest
+	(*CreateShardResponse)(nil),    // 2: conjugate.data.CreateShardResponse
+	(*DeleteShardRequest)(nil),     // 3: conjugate.data.DeleteShardRequest
+	(*DeleteShardResponse)(nil),    // 4: conjugate.data.DeleteShardResponse
+	(*GetShardInfoRequest)(nil),    // 5: conjugate.data.GetShardInfoRequest
+	(*ShardInfo)(nil),              // 6: conjugate.data.ShardInfo
+	(*RefreshShardRequest)(nil),    // 7: conjugate.data.RefreshShardRequest
+	(*RefreshShardResponse)(nil),   // 8: conjugate.data.RefreshShardResponse
+	(*FlushShardRequest)(nil),      // 9: conjugate.data.FlushShardRequest
+	(*FlushShardResponse)(nil),     // 10: conjugate.data.FlushShardResponse
+	(*IndexDocumentRequest)(nil),   // 11: conjugate.data.IndexDocumentRequest
+	(*IndexDocumentResponse)(nil),  // 12: conjugate.data.IndexDocumentResponse
+	(*GetDocumentRequest)(nil),     // 13: conjugate.data.GetDocumentRequest
+	(*GetDocumentResponse)(nil),    // 14: conjugate.data.GetDocumentResponse
+	(*DeleteDocumentRequest)(nil),  // 15: conjugate.data.DeleteDocumentRequest
+	(*DeleteDocumentResponse)(nil), // 16: conjugate.data.DeleteDocumentResponse
+	(*BulkIndexRequest)(nil),       // 17: conjugate.data.BulkIndexRequest
+	(*BulkIndexItem)(nil),          // 18: conjugate.data.BulkIndexItem
+	(*BulkIndexResponse)(nil),      // 19: conjugate.data.BulkIndexResponse
+	(*BulkIndexItemResponse)(nil),  // 20: conjugate.data.BulkIndexItemResponse
+	(*SearchRequest)(nil),          // 21: conjugate.data.SearchRequest
+	(*SearchResponse)(nil),         // 22: conjugate.data.SearchResponse
+	(*ShardSearchStats)(nil),       // 23: conjugate.data.ShardSearchStats
+	(*SearchHits)(nil),             // 24: conjugate.data.SearchHits
+	(*TotalHits)(nil),              // 25: conjugate.data.TotalHits
+	(*SearchHit)(nil),              // 26: conjugate.data.SearchHit
+	(*AggregationResult)(nil),      // 27: conjugate.data.AggregationResult
+	(*AggregationBucket)(nil),      // 28: conjugate.data.AggregationBucket
+	(*CountRequest)(nil),           // 29: conjugate.data.CountRequest
+	(*CountResponse)(nil),          // 30: conjugate.data.CountResponse
+	(*GetShardStatsRequest)(nil),   // 31: conjugate.data.GetShardStatsRequest
+	(*ShardStats)(nil),             // 32: conjugate.data.ShardStats
+	(*GetNodeStatsRequest)(nil),    // 33: conjugate.data.GetNodeStatsRequest
+	(*DataNodeStats)(nil),          // 34: conjugate.data.DataNodeStats
+	(*ForceMergeRequest)(nil),      // 35: conjugate.data.ForceMergeRequest
+	(*ForceMergeResponse)(nil),     // 36: conjugate.data.ForceMergeResponse
+	nil,                            // 37: conjugate.data.CreateShardRequest.SettingsEntry
+	nil,                            // 38: conjugate.data.SearchResponse.AggregationsEntry
+	nil,                            // 39: conjugate.data.AggregationResult.ValuesEntry
+	nil,                            // 40: conjugate.data.AggregationBucket.SubAggregationsEntry
+	(*timestamppb.Timestamp)(nil),  // 41: google.protobuf.Timestamp
+	(*structpb.Struct)(nil),        // 42: google.protobuf.Struct
 }
 var file_pkg_common_proto_data_proto_depIdxs = []int32{
-	35, // 0: quidditch.data.CreateShardRequest.settings:type_name -> quidditch.data.CreateShardRequest.SettingsEntry
-	0,  // 1: quidditch.data.ShardInfo.state:type_name -> quidditch.data.ShardInfo.ShardState
-	39, // 2: quidditch.data.ShardInfo.created_at:type_name -> google.protobuf.Timestamp
-	39, // 3: quidditch.data.ShardInfo.last_updated:type_name -> google.protobuf.Timestamp
-	40, // 4: quidditch.data.IndexDocumentRequest.document:type_name -> google.protobuf.Struct
-	40, // 5: quidditch.data.GetDocumentResponse.document:type_name -> google.protobuf.Struct
-	18, // 6: quidditch.data.BulkIndexRequest.items:type_name -> quidditch.data.BulkIndexItem
-	40, // 7: quidditch.data.BulkIndexItem.document:type_name -> google.protobuf.Struct
-	20, // 8: quidditch.data.BulkIndexResponse.items:type_name -> quidditch.data.BulkIndexItemResponse
-	23, // 9: quidditch.data.SearchResponse.shards:type_name -> quidditch.data.ShardSearchStats
-	24, // 10: quidditch.data.SearchResponse.hits:type_name -> quidditch.data.SearchHits
-	36, // 11: quidditch.data.SearchResponse.aggregations:type_name -> quidditch.data.SearchResponse.AggregationsEntry
-	25, // 12: quidditch.data.SearchHits.total:type_name -> quidditch.data.TotalHits
-	26, // 13: quidditch.data.SearchHits.hits:type_name -> quidditch.data.SearchHit
-	40, // 14: quidditch.data.SearchHit.source:type_name -> google.protobuf.Struct
-	28, // 15: quidditch.data.AggregationResult.buckets:type_name -> quidditch.data.AggregationBucket
-	37, // 16: quidditch.data.AggregationResult.values:type_name -> quidditch.data.AggregationResult.ValuesEntry
-	38, // 17: quidditch.data.AggregationBucket.sub_aggregations:type_name -> quidditch.data.AggregationBucket.SubAggregationsEntry
-	32, // 18: quidditch.data.DataNodeStats.shards:type_name -> quidditch.data.ShardStats
-	27, // 19: quidditch.data.SearchResponse.AggregationsEntry.value:type_name -> quidditch.data.AggregationResult
-	27, // 20: quidditch.data.AggregationBucket.SubAggregationsEntry.value:type_name -> quidditch.data.AggregationResult
-	1,  // 21: quidditch.data.DataService.CreateShard:input_type -> quidditch.data.CreateShardRequest
-	3,  // 22: quidditch.data.DataService.DeleteShard:input_type -> quidditch.data.DeleteShardRequest
-	5,  // 23: quidditch.data.DataService.GetShardInfo:input_type -> quidditch.data.GetShardInfoRequest
-	7,  // 24: quidditch.data.DataService.RefreshShard:input_type -> quidditch.data.RefreshShardRequest
-	9,  // 25: quidditch.data.DataService.FlushShard:input_type -> quidditch.data.FlushShardRequest
-	11, // 26: quidditch.data.DataService.IndexDocument:input_type -> quidditch.data.IndexDocumentRequest
-	13, // 27: quidditch.data.DataService.GetDocument:input_type -> quidditch.data.GetDocumentRequest
-	15, // 28: quidditch.data.DataService.DeleteDocument:input_type -> quidditch.data.DeleteDocumentRequest
-	17, // 29: quidditch.data.DataService.BulkIndex:input_type -> quidditch.data.BulkIndexRequest
-	21, // 30: quidditch.data.DataService.Search:input_type -> quidditch.data.SearchRequest
-	29, // 31: quidditch.data.DataService.Count:input_type -> quidditch.data.CountRequest
-	31, // 32: quidditch.data.DataService.GetShardStats:input_type -> quidditch.data.GetShardStatsRequest
-	33, // 33: quidditch.data.DataService.GetNodeStats:input_type -> quidditch.data.GetNodeStatsRequest
-	2,  // 34: quidditch.data.DataService.CreateShard:output_type -> quidditch.data.CreateShardResponse
-	4,  // 35: quidditch.data.DataService.DeleteShard:output_type -> quidditch.data.DeleteShardResponse
-	6,  // 36: quidditch.data.DataService.GetShardInfo:output_type -> quidditch.data.ShardInfo
-	8,  // 37: quidditch.data.DataService.RefreshShard:output_type -> quidditch.data.RefreshShardResponse
-	10, // 38: quidditch.data.DataService.FlushShard:output_type -> quidditch.data.FlushShardResponse
-	12, // 39: quidditch.data.DataService.IndexDocument:output_type -> quidditch.data.IndexDocumentResponse
-	14, // 40: quidditch.data.DataService.GetDocument:output_type -> quidditch.data.GetDocumentResponse
-	16, // 41: quidditch.data.DataService.DeleteDocument:output_type -> quidditch.data.DeleteDocumentResponse
-	19, // 42: quidditch.data.DataService.BulkIndex:output_type -> quidditch.data.BulkIndexResponse
-	22, // 43: quidditch.data.DataService.Search:output_type -> quidditch.data.SearchResponse
-	30, // 44: quidditch.data.DataService.Count:output_type -> quidditch.data.CountResponse
-	32, // 45: quidditch.data.DataService.GetShardStats:output_type -> quidditch.data.ShardStats
-	34, // 46: quidditch.data.DataService.GetNodeStats:output_type -> quidditch.data.DataNodeStats
-	34, // [34:47] is the sub-list for method output_type
-	21, // [21:34] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	37, // 0: conjugate.data.CreateShardRequest.settings:type_name -> conjugate.data.CreateShardRequest.SettingsEntry
+	0,  // 1: conjugate.data.ShardInfo.state:type_name -> conjugate.data.ShardInfo.ShardState
+	41, // 2: conjugate.data.ShardInfo.created_at:type_name -> google.protobuf.Timestamp
+	41, // 3: conjugate.data.ShardInfo.last_updated:type_name -> google.protobuf.Timestamp
+	42, // 4: conjugate.data.IndexDocumentRequest.document:type_name -> google.protobuf.Struct
+	42, // 5: conjugate.data.GetDocumentResponse.document:type_name -> google.protobuf.Struct
+	18, // 6: conjugate.data.BulkIndexRequest.items:type_name -> conjugate.data.BulkIndexItem
+	20, // 7: conjugate.data.BulkIndexResponse.items:type_name -> conjugate.data.BulkIndexItemResponse
+	23, // 8: conjugate.data.SearchResponse.shards:type_name -> conjugate.data.ShardSearchStats
+	24, // 9: conjugate.data.SearchResponse.hits:type_name -> conjugate.data.SearchHits
+	38, // 10: conjugate.data.SearchResponse.aggregations:type_name -> conjugate.data.SearchResponse.AggregationsEntry
+	25, // 11: conjugate.data.SearchHits.total:type_name -> conjugate.data.TotalHits
+	26, // 12: conjugate.data.SearchHits.hits:type_name -> conjugate.data.SearchHit
+	42, // 13: conjugate.data.SearchHit.source:type_name -> google.protobuf.Struct
+	28, // 14: conjugate.data.AggregationResult.buckets:type_name -> conjugate.data.AggregationBucket
+	39, // 15: conjugate.data.AggregationResult.values:type_name -> conjugate.data.AggregationResult.ValuesEntry
+	40, // 16: conjugate.data.AggregationBucket.sub_aggregations:type_name -> conjugate.data.AggregationBucket.SubAggregationsEntry
+	32, // 17: conjugate.data.DataNodeStats.shards:type_name -> conjugate.data.ShardStats
+	27, // 18: conjugate.data.SearchResponse.AggregationsEntry.value:type_name -> conjugate.data.AggregationResult
+	27, // 19: conjugate.data.AggregationBucket.SubAggregationsEntry.value:type_name -> conjugate.data.AggregationResult
+	1,  // 20: conjugate.data.DataService.CreateShard:input_type -> conjugate.data.CreateShardRequest
+	3,  // 21: conjugate.data.DataService.DeleteShard:input_type -> conjugate.data.DeleteShardRequest
+	5,  // 22: conjugate.data.DataService.GetShardInfo:input_type -> conjugate.data.GetShardInfoRequest
+	7,  // 23: conjugate.data.DataService.RefreshShard:input_type -> conjugate.data.RefreshShardRequest
+	9,  // 24: conjugate.data.DataService.FlushShard:input_type -> conjugate.data.FlushShardRequest
+	11, // 25: conjugate.data.DataService.IndexDocument:input_type -> conjugate.data.IndexDocumentRequest
+	13, // 26: conjugate.data.DataService.GetDocument:input_type -> conjugate.data.GetDocumentRequest
+	15, // 27: conjugate.data.DataService.DeleteDocument:input_type -> conjugate.data.DeleteDocumentRequest
+	17, // 28: conjugate.data.DataService.BulkIndex:input_type -> conjugate.data.BulkIndexRequest
+	21, // 29: conjugate.data.DataService.Search:input_type -> conjugate.data.SearchRequest
+	29, // 30: conjugate.data.DataService.Count:input_type -> conjugate.data.CountRequest
+	31, // 31: conjugate.data.DataService.GetShardStats:input_type -> conjugate.data.GetShardStatsRequest
+	33, // 32: conjugate.data.DataService.GetNodeStats:input_type -> conjugate.data.GetNodeStatsRequest
+	35, // 33: conjugate.data.DataService.ForceMerge:input_type -> conjugate.data.ForceMergeRequest
+	2,  // 34: conjugate.data.DataService.CreateShard:output_type -> conjugate.data.CreateShardResponse
+	4,  // 35: conjugate.data.DataService.DeleteShard:output_type -> conjugate.data.DeleteShardResponse
+	6,  // 36: conjugate.data.DataService.GetShardInfo:output_type -> conjugate.data.ShardInfo
+	8,  // 37: conjugate.data.DataService.RefreshShard:output_type -> conjugate.data.RefreshShardResponse
+	10, // 38: conjugate.data.DataService.FlushShard:output_type -> conjugate.data.FlushShardResponse
+	12, // 39: conjugate.data.DataService.IndexDocument:output_type -> conjugate.data.IndexDocumentResponse
+	14, // 40: conjugate.data.DataService.GetDocument:output_type -> conjugate.data.GetDocumentResponse
+	16, // 41: conjugate.data.DataService.DeleteDocument:output_type -> conjugate.data.DeleteDocumentResponse
+	19, // 42: conjugate.data.DataService.BulkIndex:output_type -> conjugate.data.BulkIndexResponse
+	22, // 43: conjugate.data.DataService.Search:output_type -> conjugate.data.SearchResponse
+	30, // 44: conjugate.data.DataService.Count:output_type -> conjugate.data.CountResponse
+	32, // 45: conjugate.data.DataService.GetShardStats:output_type -> conjugate.data.ShardStats
+	34, // 46: conjugate.data.DataService.GetNodeStats:output_type -> conjugate.data.DataNodeStats
+	36, // 47: conjugate.data.DataService.ForceMerge:output_type -> conjugate.data.ForceMergeResponse
+	34, // [34:48] is the sub-list for method output_type
+	20, // [20:34] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_pkg_common_proto_data_proto_init() }
@@ -2655,13 +2846,14 @@ func file_pkg_common_proto_data_proto_init() {
 	if File_pkg_common_proto_data_proto != nil {
 		return
 	}
+	file_pkg_common_proto_data_proto_msgTypes[27].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_pkg_common_proto_data_proto_rawDesc), len(file_pkg_common_proto_data_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   38,
+			NumMessages:   40,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

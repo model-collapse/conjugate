@@ -1128,8 +1128,9 @@ func (c *CoordinationNode) handleBulk(ctx *gin.Context) {
 		docs := make([]router.BulkDocItem, len(entries))
 		for j, entry := range entries {
 			docs[j] = router.BulkDocItem{
-				DocID:    entry.op.ID,
-				Document: entry.op.Document,
+				DocID:        entry.op.ID,
+				Document:     entry.op.Document,
+				DocumentJSON: entry.op.RawJSON,
 			}
 		}
 

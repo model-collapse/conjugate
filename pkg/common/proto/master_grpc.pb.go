@@ -462,7 +462,7 @@ func _MasterService_NodeHeartbeat_Handler(srv interface{}, ctx context.Context, 
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var MasterService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "quidditch.master.MasterService",
+	ServiceName: "conjugate.master.MasterService",
 	HandlerType: (*MasterServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{

@@ -685,8 +685,9 @@ func (s *Shard) IndexDocument(docID string, doc map[string]interface{}) error {
 // BulkIndexDocuments indexes multiple documents in a batch to reduce CGO overhead.
 // This is significantly faster than calling IndexDocument repeatedly.
 func (s *Shard) BulkIndexDocuments(docs []struct {
-	ID  string
-	Doc map[string]interface{}
+	ID         string
+	Doc        map[string]interface{}
+	SourceJSON []byte
 }) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -695,7 +696,7 @@ func (s *Shard) BulkIndexDocuments(docs []struct {
 		zap.Int("num_docs", len(docs)))
 
 	// Helper function to create a Diagon document from Go map
-	createDiagonDoc := func(docID string, doc map[string]interface{}) C.DiagonDocument {
+	createDiagonDoc := func(docID string, doc map[string]interface{}, rawJSON []byte) C.DiagonDocument {
 		diagonDoc := C.diagon_create_document()
 
 		// Add ID field - both indexed (for searching) and stored (for retrieval)
@@ -713,11 +714,15 @@ func (s *Shard) BulkIndexDocuments(docs []struct {
 		C.diagon_document_add_field(diagonDoc, storedIDField)
 
 		// Store full _source as JSON for reliable document retrieval
-		sourceJSON, err := json.Marshal(doc)
-		if err == nil {
+		// Use pre-existing raw JSON bytes when available to avoid re-marshaling
+		sourceBytes := rawJSON
+		if sourceBytes == nil {
+			sourceBytes, _ = json.Marshal(doc)
+		}
+		if sourceBytes != nil {
 			cSourceFieldName := C.CString("_source")
 			defer C.free(unsafe.Pointer(cSourceFieldName))
-			cSourceValue := C.CString(string(sourceJSON))
+			cSourceValue := C.CString(string(sourceBytes))
 			defer C.free(unsafe.Pointer(cSourceValue))
 			sourceField := C.diagon_create_stored_field(cSourceFieldName, cSourceValue)
 			C.diagon_document_add_field(diagonDoc, sourceField)
@@ -811,7 +816,7 @@ func (s *Shard) BulkIndexDocuments(docs []struct {
 
 	// Index all documents in batch
 	for i, item := range docs {
-		diagonDoc := createDiagonDoc(item.ID, item.Doc)
+		diagonDoc := createDiagonDoc(item.ID, item.Doc, item.SourceJSON)
 		defer C.diagon_free_document(diagonDoc)
 
 		result := C.diagon_add_document(s.writer, diagonDoc)

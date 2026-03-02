@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/conjugate/conjugate/pkg/common/config"
+	_ "github.com/conjugate/conjugate/pkg/common/vtcodec" // register vtprotobuf gRPC codec
 	"github.com/conjugate/conjugate/pkg/data"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"

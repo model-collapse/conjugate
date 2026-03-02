@@ -25,6 +25,7 @@ type BulkOperation struct {
 	ID        string
 	Document  map[string]interface{} // For index, create, update
 	UpdateDoc map[string]interface{} // For update operations (the "doc" field)
+	RawJSON   []byte                 // Raw JSON bytes of document body (for pass-through to data nodes)
 }
 
 // BulkRequest represents a parsed bulk request
@@ -156,6 +157,10 @@ func ParseBulkRequest(body []byte) (*BulkRequest, error) {
 				}
 			} else {
 				op.Document = document
+				// Store raw JSON bytes for zero-copy pass-through to data nodes.
+				// scanner.Bytes() is reused between calls, so we must copy.
+				op.RawJSON = make([]byte, len(docLine))
+				copy(op.RawJSON, docLine)
 			}
 		}
 

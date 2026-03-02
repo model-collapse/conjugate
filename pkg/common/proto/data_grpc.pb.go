@@ -32,6 +32,7 @@ const (
 	DataService_Count_FullMethodName          = "/conjugate.data.DataService/Count"
 	DataService_GetShardStats_FullMethodName  = "/conjugate.data.DataService/GetShardStats"
 	DataService_GetNodeStats_FullMethodName   = "/conjugate.data.DataService/GetNodeStats"
+	DataService_ForceMerge_FullMethodName     = "/conjugate.data.DataService/ForceMerge"
 )
 
 // DataServiceClient is the client API for DataService service.
@@ -57,6 +58,8 @@ type DataServiceClient interface {
 	// Statistics and health
 	GetShardStats(ctx context.Context, in *GetShardStatsRequest, opts ...grpc.CallOption) (*ShardStats, error)
 	GetNodeStats(ctx context.Context, in *GetNodeStatsRequest, opts ...grpc.CallOption) (*DataNodeStats, error)
+	// Index optimization
+	ForceMerge(ctx context.Context, in *ForceMergeRequest, opts ...grpc.CallOption) (*ForceMergeResponse, error)
 }
 
 type dataServiceClient struct {
@@ -197,6 +200,16 @@ func (c *dataServiceClient) GetNodeStats(ctx context.Context, in *GetNodeStatsRe
 	return out, nil
 }
 
+func (c *dataServiceClient) ForceMerge(ctx context.Context, in *ForceMergeRequest, opts ...grpc.CallOption) (*ForceMergeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ForceMergeResponse)
+	err := c.cc.Invoke(ctx, DataService_ForceMerge_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataServiceServer is the server API for DataService service.
 // All implementations must embed UnimplementedDataServiceServer
 // for forward compatibility.
@@ -220,6 +233,8 @@ type DataServiceServer interface {
 	// Statistics and health
 	GetShardStats(context.Context, *GetShardStatsRequest) (*ShardStats, error)
 	GetNodeStats(context.Context, *GetNodeStatsRequest) (*DataNodeStats, error)
+	// Index optimization
+	ForceMerge(context.Context, *ForceMergeRequest) (*ForceMergeResponse, error)
 	mustEmbedUnimplementedDataServiceServer()
 }
 
@@ -268,6 +283,9 @@ func (UnimplementedDataServiceServer) GetShardStats(context.Context, *GetShardSt
 }
 func (UnimplementedDataServiceServer) GetNodeStats(context.Context, *GetNodeStatsRequest) (*DataNodeStats, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNodeStats not implemented")
+}
+func (UnimplementedDataServiceServer) ForceMerge(context.Context, *ForceMergeRequest) (*ForceMergeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForceMerge not implemented")
 }
 func (UnimplementedDataServiceServer) mustEmbedUnimplementedDataServiceServer() {}
 func (UnimplementedDataServiceServer) testEmbeddedByValue()                     {}
@@ -524,11 +542,29 @@ func _DataService_GetNodeStats_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataService_ForceMerge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForceMergeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).ForceMerge(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_ForceMerge_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).ForceMerge(ctx, req.(*ForceMergeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataService_ServiceDesc is the grpc.ServiceDesc for DataService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var DataService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "quidditch.data.DataService",
+	ServiceName: "conjugate.data.DataService",
 	HandlerType: (*DataServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -582,6 +618,10 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetNodeStats",
 			Handler:    _DataService_GetNodeStats_Handler,
+		},
+		{
+			MethodName: "ForceMerge",
+			Handler:    _DataService_ForceMerge_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

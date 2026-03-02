@@ -421,7 +421,7 @@ type ClusterStateResponse struct {
 	Version       int64                  `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
 	ClusterName   string                 `protobuf:"bytes,2,opt,name=cluster_name,json=clusterName,proto3" json:"cluster_name,omitempty"`
 	ClusterUuid   string                 `protobuf:"bytes,3,opt,name=cluster_uuid,json=clusterUuid,proto3" json:"cluster_uuid,omitempty"`
-	Status        ClusterStatus          `protobuf:"varint,4,opt,name=status,proto3,enum=quidditch.master.ClusterStatus" json:"status,omitempty"`
+	Status        ClusterStatus          `protobuf:"varint,4,opt,name=status,proto3,enum=conjugate.master.ClusterStatus" json:"status,omitempty"`
 	Indices       []*IndexMetadata       `protobuf:"bytes,5,rep,name=indices,proto3" json:"indices,omitempty"`
 	RoutingTable  *RoutingTable          `protobuf:"bytes,6,opt,name=routing_table,json=routingTable,proto3" json:"routing_table,omitempty"`
 	Nodes         []*NodeInfo            `protobuf:"bytes,7,rep,name=nodes,proto3" json:"nodes,omitempty"`
@@ -563,7 +563,7 @@ func (x *WatchClusterStateRequest) GetFromVersion() int64 {
 type ClusterStateEvent struct {
 	state         protoimpl.MessageState      `protogen:"open.v1"`
 	Version       int64                       `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
-	Type          ClusterStateEvent_EventType `protobuf:"varint,2,opt,name=type,proto3,enum=quidditch.master.ClusterStateEvent_EventType" json:"type,omitempty"`
+	Type          ClusterStateEvent_EventType `protobuf:"varint,2,opt,name=type,proto3,enum=conjugate.master.ClusterStateEvent_EventType" json:"type,omitempty"`
 	Payload       []byte                      `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1029,7 +1029,7 @@ type IndexMetadata struct {
 	Settings      *IndexSettings           `protobuf:"bytes,4,opt,name=settings,proto3" json:"settings,omitempty"`
 	Mappings      map[string]*FieldMapping `protobuf:"bytes,5,rep,name=mappings,proto3" json:"mappings,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Aliases       map[string]string        `protobuf:"bytes,6,rep,name=aliases,proto3" json:"aliases,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	State         IndexMetadata_IndexState `protobuf:"varint,7,opt,name=state,proto3,enum=quidditch.master.IndexMetadata_IndexState" json:"state,omitempty"`
+	State         IndexMetadata_IndexState `protobuf:"varint,7,opt,name=state,proto3,enum=conjugate.master.IndexMetadata_IndexState" json:"state,omitempty"`
 	CreatedAt     *timestamppb.Timestamp   `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1838,7 +1838,7 @@ func (x *ShardRouting) GetAllocation() *ShardAllocation {
 type ShardAllocation struct {
 	state         protoimpl.MessageState     `protogen:"open.v1"`
 	NodeId        string                     `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	State         ShardAllocation_ShardState `protobuf:"varint,2,opt,name=state,proto3,enum=quidditch.master.ShardAllocation_ShardState" json:"state,omitempty"`
+	State         ShardAllocation_ShardState `protobuf:"varint,2,opt,name=state,proto3,enum=conjugate.master.ShardAllocation_ShardState" json:"state,omitempty"`
 	AllocatedAt   *timestamppb.Timestamp     `protobuf:"bytes,3,opt,name=allocated_at,json=allocatedAt,proto3" json:"allocated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1899,7 +1899,7 @@ func (x *ShardAllocation) GetAllocatedAt() *timestamppb.Timestamp {
 type RegisterNodeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	NodeType      NodeType               `protobuf:"varint,2,opt,name=node_type,json=nodeType,proto3,enum=quidditch.master.NodeType" json:"node_type,omitempty"`
+	NodeType      NodeType               `protobuf:"varint,2,opt,name=node_type,json=nodeType,proto3,enum=conjugate.master.NodeType" json:"node_type,omitempty"`
 	BindAddr      string                 `protobuf:"bytes,3,opt,name=bind_addr,json=bindAddr,proto3" json:"bind_addr,omitempty"`
 	GrpcPort      int32                  `protobuf:"varint,4,opt,name=grpc_port,json=grpcPort,proto3" json:"grpc_port,omitempty"`
 	Attributes    *NodeAttributes        `protobuf:"bytes,5,opt,name=attributes,proto3" json:"attributes,omitempty"`
@@ -2220,11 +2220,11 @@ type NodeInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	NodeName      string                 `protobuf:"bytes,2,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	NodeType      NodeType               `protobuf:"varint,3,opt,name=node_type,json=nodeType,proto3,enum=quidditch.master.NodeType" json:"node_type,omitempty"`
+	NodeType      NodeType               `protobuf:"varint,3,opt,name=node_type,json=nodeType,proto3,enum=conjugate.master.NodeType" json:"node_type,omitempty"`
 	BindAddr      string                 `protobuf:"bytes,4,opt,name=bind_addr,json=bindAddr,proto3" json:"bind_addr,omitempty"`
 	GrpcPort      int32                  `protobuf:"varint,5,opt,name=grpc_port,json=grpcPort,proto3" json:"grpc_port,omitempty"`
 	Attributes    *NodeAttributes        `protobuf:"bytes,6,opt,name=attributes,proto3" json:"attributes,omitempty"`
-	Status        NodeStatus             `protobuf:"varint,7,opt,name=status,proto3,enum=quidditch.master.NodeStatus" json:"status,omitempty"`
+	Status        NodeStatus             `protobuf:"varint,7,opt,name=status,proto3,enum=conjugate.master.NodeStatus" json:"status,omitempty"`
 	JoinedAt      *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=joined_at,json=joinedAt,proto3" json:"joined_at,omitempty"`
 	LastSeen      *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=last_seen,json=lastSeen,proto3" json:"last_seen,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2572,7 +2572,7 @@ var File_pkg_common_proto_master_proto protoreflect.FileDescriptor
 
 const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\n" +
-	"\x1dpkg/common/proto/master.proto\x12\x10quidditch.master\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8f\x01\n" +
+	"\x1dpkg/common/proto/master.proto\x12\x10conjugate.master\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8f\x01\n" +
 	"\x16GetClusterStateRequest\x12'\n" +
 	"\x0finclude_routing\x18\x01 \x01(\bR\x0eincludeRouting\x12#\n" +
 	"\rinclude_nodes\x18\x02 \x01(\bR\fincludeNodes\x12'\n" +
@@ -2581,17 +2581,17 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12!\n" +
 	"\fcluster_name\x18\x02 \x01(\tR\vclusterName\x12!\n" +
 	"\fcluster_uuid\x18\x03 \x01(\tR\vclusterUuid\x127\n" +
-	"\x06status\x18\x04 \x01(\x0e2\x1f.quidditch.master.ClusterStatusR\x06status\x129\n" +
-	"\aindices\x18\x05 \x03(\v2\x1f.quidditch.master.IndexMetadataR\aindices\x12C\n" +
-	"\rrouting_table\x18\x06 \x01(\v2\x1e.quidditch.master.RoutingTableR\froutingTable\x120\n" +
-	"\x05nodes\x18\a \x03(\v2\x1a.quidditch.master.NodeInfoR\x05nodes\x12=\n" +
-	"\vmaster_node\x18\b \x01(\v2\x1c.quidditch.master.MasterNodeR\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x1f.conjugate.master.ClusterStatusR\x06status\x129\n" +
+	"\aindices\x18\x05 \x03(\v2\x1f.conjugate.master.IndexMetadataR\aindices\x12C\n" +
+	"\rrouting_table\x18\x06 \x01(\v2\x1e.conjugate.master.RoutingTableR\froutingTable\x120\n" +
+	"\x05nodes\x18\a \x03(\v2\x1a.conjugate.master.NodeInfoR\x05nodes\x12=\n" +
+	"\vmaster_node\x18\b \x01(\v2\x1c.conjugate.master.MasterNodeR\n" +
 	"masterNode\"=\n" +
 	"\x18WatchClusterStateRequest\x12!\n" +
 	"\ffrom_version\x18\x01 \x01(\x03R\vfromVersion\"\xe2\x02\n" +
 	"\x11ClusterStateEvent\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12A\n" +
-	"\x04type\x18\x02 \x01(\x0e2-.quidditch.master.ClusterStateEvent.EventTypeR\x04type\x12\x18\n" +
+	"\x04type\x18\x02 \x01(\x0e2-.conjugate.master.ClusterStateEvent.EventTypeR\x04type\x12\x18\n" +
 	"\apayload\x18\x03 \x01(\fR\apayload\"\xd5\x01\n" +
 	"\tEventType\x12\x16\n" +
 	"\x12EVENT_TYPE_UNKNOWN\x10\x00\x12\x1c\n" +
@@ -2604,12 +2604,12 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\x12CreateIndexRequest\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12;\n" +
-	"\bsettings\x18\x02 \x01(\v2\x1f.quidditch.master.IndexSettingsR\bsettings\x12N\n" +
-	"\bmappings\x18\x03 \x03(\v22.quidditch.master.CreateIndexRequest.MappingsEntryR\bmappings\x12K\n" +
-	"\aaliases\x18\x04 \x03(\v21.quidditch.master.CreateIndexRequest.AliasesEntryR\aaliases\x1a[\n" +
+	"\bsettings\x18\x02 \x01(\v2\x1f.conjugate.master.IndexSettingsR\bsettings\x12N\n" +
+	"\bmappings\x18\x03 \x03(\v22.conjugate.master.CreateIndexRequest.MappingsEntryR\bmappings\x12K\n" +
+	"\aaliases\x18\x04 \x03(\v21.conjugate.master.CreateIndexRequest.AliasesEntryR\aaliases\x1a[\n" +
 	"\rMappingsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x124\n" +
-	"\x05value\x18\x02 \x01(\v2\x1e.quidditch.master.FieldMappingR\x05value:\x028\x01\x1a:\n" +
+	"\x05value\x18\x02 \x01(\v2\x1e.conjugate.master.FieldMappingR\x05value:\x028\x01\x1a:\n" +
 	"\fAliasesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"r\n" +
@@ -2626,29 +2626,29 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\x1aUpdateIndexSettingsRequest\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12;\n" +
-	"\bsettings\x18\x02 \x01(\v2\x1f.quidditch.master.IndexSettingsR\bsettings\"A\n" +
+	"\bsettings\x18\x02 \x01(\v2\x1f.conjugate.master.IndexSettingsR\bsettings\"A\n" +
 	"\x1bUpdateIndexSettingsResponse\x12\"\n" +
 	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"8\n" +
 	"\x17GetIndexMetadataRequest\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\"T\n" +
 	"\x15IndexMetadataResponse\x12;\n" +
-	"\bmetadata\x18\x01 \x01(\v2\x1f.quidditch.master.IndexMetadataR\bmetadata\"\xd7\x05\n" +
+	"\bmetadata\x18\x01 \x01(\v2\x1f.conjugate.master.IndexMetadataR\bmetadata\"\xd7\x05\n" +
 	"\rIndexMetadata\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12\x1d\n" +
 	"\n" +
 	"index_uuid\x18\x02 \x01(\tR\tindexUuid\x12\x18\n" +
 	"\aversion\x18\x03 \x01(\x03R\aversion\x12;\n" +
-	"\bsettings\x18\x04 \x01(\v2\x1f.quidditch.master.IndexSettingsR\bsettings\x12I\n" +
-	"\bmappings\x18\x05 \x03(\v2-.quidditch.master.IndexMetadata.MappingsEntryR\bmappings\x12F\n" +
-	"\aaliases\x18\x06 \x03(\v2,.quidditch.master.IndexMetadata.AliasesEntryR\aaliases\x12@\n" +
-	"\x05state\x18\a \x01(\x0e2*.quidditch.master.IndexMetadata.IndexStateR\x05state\x129\n" +
+	"\bsettings\x18\x04 \x01(\v2\x1f.conjugate.master.IndexSettingsR\bsettings\x12I\n" +
+	"\bmappings\x18\x05 \x03(\v2-.conjugate.master.IndexMetadata.MappingsEntryR\bmappings\x12F\n" +
+	"\aaliases\x18\x06 \x03(\v2,.conjugate.master.IndexMetadata.AliasesEntryR\aaliases\x12@\n" +
+	"\x05state\x18\a \x01(\x0e2*.conjugate.master.IndexMetadata.IndexStateR\x05state\x129\n" +
 	"\n" +
 	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x1a[\n" +
 	"\rMappingsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x124\n" +
-	"\x05value\x18\x02 \x01(\v2\x1e.quidditch.master.FieldMappingR\x05value:\x028\x01\x1a:\n" +
+	"\x05value\x18\x02 \x01(\v2\x1e.conjugate.master.FieldMappingR\x05value:\x028\x01\x1a:\n" +
 	"\fAliasesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x87\x01\n" +
@@ -2663,15 +2663,15 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\x10number_of_shards\x18\x01 \x01(\x05R\x0enumberOfShards\x12,\n" +
 	"\x12number_of_replicas\x18\x02 \x01(\x05R\x10numberOfReplicas\x12)\n" +
 	"\x10refresh_interval\x18\x03 \x01(\tR\x0frefreshInterval\x12G\n" +
-	"\vcompression\x18\x04 \x01(\v2%.quidditch.master.CompressionSettingsR\vcompression\x12;\n" +
-	"\atiering\x18\x05 \x01(\v2!.quidditch.master.TieringSettingsR\atiering\"A\n" +
+	"\vcompression\x18\x04 \x01(\v2%.conjugate.master.CompressionSettingsR\vcompression\x12;\n" +
+	"\atiering\x18\x05 \x01(\v2!.conjugate.master.TieringSettingsR\atiering\"A\n" +
 	"\x13CompressionSettings\x12\x14\n" +
 	"\x05codec\x18\x01 \x01(\tR\x05codec\x12\x14\n" +
 	"\x05level\x18\x02 \x01(\x05R\x05level\"\xc3\x01\n" +
 	"\x0fTieringSettings\x12!\n" +
 	"\fdefault_tier\x18\x01 \x01(\tR\vdefaultTier\x12O\n" +
 	"\n" +
-	"tier_rules\x18\x02 \x03(\v20.quidditch.master.TieringSettings.TierRulesEntryR\ttierRules\x1a<\n" +
+	"tier_rules\x18\x02 \x03(\v20.conjugate.master.TieringSettings.TierRulesEntryR\ttierRules\x1a<\n" +
 	"\x0eTierRulesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x99\x02\n" +
@@ -2681,11 +2681,11 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\x05store\x18\x03 \x01(\bR\x05store\x12\x1a\n" +
 	"\banalyzer\x18\x04 \x01(\tR\banalyzer\x12N\n" +
 	"\n" +
-	"properties\x18\x05 \x03(\v2..quidditch.master.FieldMapping.PropertiesEntryR\n" +
+	"properties\x18\x05 \x03(\v2..conjugate.master.FieldMapping.PropertiesEntryR\n" +
 	"properties\x1a]\n" +
 	"\x0fPropertiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x124\n" +
-	"\x05value\x18\x02 \x01(\v2\x1e.quidditch.master.FieldMappingR\x05value:\x028\x01\"\x9b\x01\n" +
+	"\x05value\x18\x02 \x01(\v2\x1e.conjugate.master.FieldMappingR\x05value:\x028\x01\"\x9b\x01\n" +
 	"\x14AllocateShardRequest\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12\x19\n" +
@@ -2697,14 +2697,14 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\facknowledged\x18\x01 \x01(\bR\facknowledged\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12A\n" +
 	"\n" +
-	"allocation\x18\x03 \x01(\v2!.quidditch.master.ShardAllocationR\n" +
+	"allocation\x18\x03 \x01(\v2!.conjugate.master.ShardAllocationR\n" +
 	"allocation\"R\n" +
 	"\x16RebalanceShardsRequest\x12\x1f\n" +
 	"\vindex_names\x18\x01 \x03(\tR\n" +
 	"indexNames\x12\x17\n" +
 	"\adry_run\x18\x02 \x01(\bR\x06dryRun\"^\n" +
 	"\x17RebalanceShardsResponse\x12C\n" +
-	"\vrelocations\x18\x01 \x03(\v2!.quidditch.master.ShardRelocationR\vrelocations\"\x81\x01\n" +
+	"\vrelocations\x18\x01 \x03(\v2!.conjugate.master.ShardRelocationR\vrelocations\"\x81\x01\n" +
 	"\x0fShardRelocation\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12\x19\n" +
@@ -2713,27 +2713,27 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\ato_node\x18\x04 \x01(\tR\x06toNode\"\xd0\x01\n" +
 	"\fRoutingTable\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x03R\aversion\x12E\n" +
-	"\aindices\x18\x02 \x03(\v2+.quidditch.master.RoutingTable.IndicesEntryR\aindices\x1a_\n" +
+	"\aindices\x18\x02 \x03(\v2+.conjugate.master.RoutingTable.IndicesEntryR\aindices\x1a_\n" +
 	"\fIndicesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x129\n" +
-	"\x05value\x18\x02 \x01(\v2#.quidditch.master.IndexRoutingTableR\x05value:\x028\x01\"\xd6\x01\n" +
+	"\x05value\x18\x02 \x01(\v2#.conjugate.master.IndexRoutingTableR\x05value:\x028\x01\"\xd6\x01\n" +
 	"\x11IndexRoutingTable\x12\x1d\n" +
 	"\n" +
 	"index_name\x18\x01 \x01(\tR\tindexName\x12G\n" +
-	"\x06shards\x18\x02 \x03(\v2/.quidditch.master.IndexRoutingTable.ShardsEntryR\x06shards\x1aY\n" +
+	"\x06shards\x18\x02 \x03(\v2/.conjugate.master.IndexRoutingTable.ShardsEntryR\x06shards\x1aY\n" +
 	"\vShardsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\x05R\x03key\x124\n" +
-	"\x05value\x18\x02 \x01(\v2\x1e.quidditch.master.ShardRoutingR\x05value:\x028\x01\"\x8b\x01\n" +
+	"\x05value\x18\x02 \x01(\v2\x1e.conjugate.master.ShardRoutingR\x05value:\x028\x01\"\x8b\x01\n" +
 	"\fShardRouting\x12\x19\n" +
 	"\bshard_id\x18\x01 \x01(\x05R\ashardId\x12\x1d\n" +
 	"\n" +
 	"is_primary\x18\x02 \x01(\bR\tisPrimary\x12A\n" +
 	"\n" +
-	"allocation\x18\x03 \x01(\v2!.quidditch.master.ShardAllocationR\n" +
+	"allocation\x18\x03 \x01(\v2!.conjugate.master.ShardAllocationR\n" +
 	"allocation\"\xc4\x02\n" +
 	"\x0fShardAllocation\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12B\n" +
-	"\x05state\x18\x02 \x01(\x0e2,.quidditch.master.ShardAllocation.ShardStateR\x05state\x12=\n" +
+	"\x05state\x18\x02 \x01(\x0e2,.conjugate.master.ShardAllocation.ShardStateR\x05state\x12=\n" +
 	"\fallocated_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vallocatedAt\"\x94\x01\n" +
 	"\n" +
 	"ShardState\x12\x17\n" +
@@ -2744,11 +2744,11 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\x16SHARD_STATE_UNASSIGNED\x10\x04\"\xe3\x01\n" +
 	"\x13RegisterNodeRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x127\n" +
-	"\tnode_type\x18\x02 \x01(\x0e2\x1a.quidditch.master.NodeTypeR\bnodeType\x12\x1b\n" +
+	"\tnode_type\x18\x02 \x01(\x0e2\x1a.conjugate.master.NodeTypeR\bnodeType\x12\x1b\n" +
 	"\tbind_addr\x18\x03 \x01(\tR\bbindAddr\x12\x1b\n" +
 	"\tgrpc_port\x18\x04 \x01(\x05R\bgrpcPort\x12@\n" +
 	"\n" +
-	"attributes\x18\x05 \x01(\v2 .quidditch.master.NodeAttributesR\n" +
+	"attributes\x18\x05 \x01(\v2 .conjugate.master.NodeAttributesR\n" +
 	"attributes\"c\n" +
 	"\x14RegisterNodeResponse\x12\"\n" +
 	"\facknowledged\x18\x01 \x01(\bR\facknowledged\x12'\n" +
@@ -2759,20 +2759,20 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\facknowledged\x18\x01 \x01(\bR\facknowledged\"b\n" +
 	"\x14NodeHeartbeatRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x121\n" +
-	"\x05stats\x18\x02 \x01(\v2\x1b.quidditch.master.NodeStatsR\x05stats\"d\n" +
+	"\x05stats\x18\x02 \x01(\v2\x1b.conjugate.master.NodeStatsR\x05stats\"d\n" +
 	"\x15NodeHeartbeatResponse\x12\"\n" +
 	"\facknowledged\x18\x01 \x01(\bR\facknowledged\x12'\n" +
 	"\x0fcluster_version\x18\x02 \x01(\x03R\x0eclusterVersion\"\x9d\x03\n" +
 	"\bNodeInfo\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1b\n" +
 	"\tnode_name\x18\x02 \x01(\tR\bnodeName\x127\n" +
-	"\tnode_type\x18\x03 \x01(\x0e2\x1a.quidditch.master.NodeTypeR\bnodeType\x12\x1b\n" +
+	"\tnode_type\x18\x03 \x01(\x0e2\x1a.conjugate.master.NodeTypeR\bnodeType\x12\x1b\n" +
 	"\tbind_addr\x18\x04 \x01(\tR\bbindAddr\x12\x1b\n" +
 	"\tgrpc_port\x18\x05 \x01(\x05R\bgrpcPort\x12@\n" +
 	"\n" +
-	"attributes\x18\x06 \x01(\v2 .quidditch.master.NodeAttributesR\n" +
+	"attributes\x18\x06 \x01(\v2 .conjugate.master.NodeAttributesR\n" +
 	"attributes\x124\n" +
-	"\x06status\x18\a \x01(\x0e2\x1c.quidditch.master.NodeStatusR\x06status\x127\n" +
+	"\x06status\x18\a \x01(\x0e2\x1c.conjugate.master.NodeStatusR\x06status\x127\n" +
 	"\tjoined_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\bjoinedAt\x127\n" +
 	"\tlast_seen\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\blastSeen\"\x90\x02\n" +
 	"\x0eNodeAttributes\x12!\n" +
@@ -2781,7 +2781,7 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"max_shards\x18\x02 \x01(\x05R\tmaxShards\x12!\n" +
 	"\fsimd_enabled\x18\x03 \x01(\bR\vsimdEnabled\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\tR\aversion\x12D\n" +
-	"\x06labels\x18\x05 \x03(\v2,.quidditch.master.NodeAttributes.LabelsEntryR\x06labels\x1a9\n" +
+	"\x06labels\x18\x05 \x03(\v2,.conjugate.master.NodeAttributes.LabelsEntryR\x06labels\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xeb\x02\n" +
@@ -2821,17 +2821,17 @@ const file_pkg_common_proto_master_proto_rawDesc = "" +
 	"\x15NODE_STATUS_UNHEALTHY\x10\x03\x12\x17\n" +
 	"\x13NODE_STATUS_OFFLINE\x10\x042\xe0\b\n" +
 	"\rMasterService\x12c\n" +
-	"\x0fGetClusterState\x12(.quidditch.master.GetClusterStateRequest\x1a&.quidditch.master.ClusterStateResponse\x12f\n" +
-	"\x11WatchClusterState\x12*.quidditch.master.WatchClusterStateRequest\x1a#.quidditch.master.ClusterStateEvent0\x01\x12Z\n" +
-	"\vCreateIndex\x12$.quidditch.master.CreateIndexRequest\x1a%.quidditch.master.CreateIndexResponse\x12Z\n" +
-	"\vDeleteIndex\x12$.quidditch.master.DeleteIndexRequest\x1a%.quidditch.master.DeleteIndexResponse\x12r\n" +
-	"\x13UpdateIndexSettings\x12,.quidditch.master.UpdateIndexSettingsRequest\x1a-.quidditch.master.UpdateIndexSettingsResponse\x12f\n" +
-	"\x10GetIndexMetadata\x12).quidditch.master.GetIndexMetadataRequest\x1a'.quidditch.master.IndexMetadataResponse\x12`\n" +
-	"\rAllocateShard\x12&.quidditch.master.AllocateShardRequest\x1a'.quidditch.master.AllocateShardResponse\x12f\n" +
-	"\x0fRebalanceShards\x12(.quidditch.master.RebalanceShardsRequest\x1a).quidditch.master.RebalanceShardsResponse\x12]\n" +
-	"\fRegisterNode\x12%.quidditch.master.RegisterNodeRequest\x1a&.quidditch.master.RegisterNodeResponse\x12c\n" +
-	"\x0eUnregisterNode\x12'.quidditch.master.UnregisterNodeRequest\x1a(.quidditch.master.UnregisterNodeResponse\x12`\n" +
-	"\rNodeHeartbeat\x12&.quidditch.master.NodeHeartbeatRequest\x1a'.quidditch.master.NodeHeartbeatResponseB1Z/github.com/conjugate/conjugate/pkg/common/protob\x06proto3"
+	"\x0fGetClusterState\x12(.conjugate.master.GetClusterStateRequest\x1a&.conjugate.master.ClusterStateResponse\x12f\n" +
+	"\x11WatchClusterState\x12*.conjugate.master.WatchClusterStateRequest\x1a#.conjugate.master.ClusterStateEvent0\x01\x12Z\n" +
+	"\vCreateIndex\x12$.conjugate.master.CreateIndexRequest\x1a%.conjugate.master.CreateIndexResponse\x12Z\n" +
+	"\vDeleteIndex\x12$.conjugate.master.DeleteIndexRequest\x1a%.conjugate.master.DeleteIndexResponse\x12r\n" +
+	"\x13UpdateIndexSettings\x12,.conjugate.master.UpdateIndexSettingsRequest\x1a-.conjugate.master.UpdateIndexSettingsResponse\x12f\n" +
+	"\x10GetIndexMetadata\x12).conjugate.master.GetIndexMetadataRequest\x1a'.conjugate.master.IndexMetadataResponse\x12`\n" +
+	"\rAllocateShard\x12&.conjugate.master.AllocateShardRequest\x1a'.conjugate.master.AllocateShardResponse\x12f\n" +
+	"\x0fRebalanceShards\x12(.conjugate.master.RebalanceShardsRequest\x1a).conjugate.master.RebalanceShardsResponse\x12]\n" +
+	"\fRegisterNode\x12%.conjugate.master.RegisterNodeRequest\x1a&.conjugate.master.RegisterNodeResponse\x12c\n" +
+	"\x0eUnregisterNode\x12'.conjugate.master.UnregisterNodeRequest\x1a(.conjugate.master.UnregisterNodeResponse\x12`\n" +
+	"\rNodeHeartbeat\x12&.conjugate.master.NodeHeartbeatRequest\x1a'.conjugate.master.NodeHeartbeatResponseB1Z/github.com/conjugate/conjugate/pkg/common/protob\x06proto3"
 
 var (
 	file_pkg_common_proto_master_proto_rawDescOnce sync.Once
@@ -2848,124 +2848,124 @@ func file_pkg_common_proto_master_proto_rawDescGZIP() []byte {
 var file_pkg_common_proto_master_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
 var file_pkg_common_proto_master_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
 var file_pkg_common_proto_master_proto_goTypes = []any{
-	(ClusterStatus)(0),                  // 0: quidditch.master.ClusterStatus
-	(NodeType)(0),                       // 1: quidditch.master.NodeType
-	(NodeStatus)(0),                     // 2: quidditch.master.NodeStatus
-	(ClusterStateEvent_EventType)(0),    // 3: quidditch.master.ClusterStateEvent.EventType
-	(IndexMetadata_IndexState)(0),       // 4: quidditch.master.IndexMetadata.IndexState
-	(ShardAllocation_ShardState)(0),     // 5: quidditch.master.ShardAllocation.ShardState
-	(*GetClusterStateRequest)(nil),      // 6: quidditch.master.GetClusterStateRequest
-	(*ClusterStateResponse)(nil),        // 7: quidditch.master.ClusterStateResponse
-	(*WatchClusterStateRequest)(nil),    // 8: quidditch.master.WatchClusterStateRequest
-	(*ClusterStateEvent)(nil),           // 9: quidditch.master.ClusterStateEvent
-	(*CreateIndexRequest)(nil),          // 10: quidditch.master.CreateIndexRequest
-	(*CreateIndexResponse)(nil),         // 11: quidditch.master.CreateIndexResponse
-	(*DeleteIndexRequest)(nil),          // 12: quidditch.master.DeleteIndexRequest
-	(*DeleteIndexResponse)(nil),         // 13: quidditch.master.DeleteIndexResponse
-	(*UpdateIndexSettingsRequest)(nil),  // 14: quidditch.master.UpdateIndexSettingsRequest
-	(*UpdateIndexSettingsResponse)(nil), // 15: quidditch.master.UpdateIndexSettingsResponse
-	(*GetIndexMetadataRequest)(nil),     // 16: quidditch.master.GetIndexMetadataRequest
-	(*IndexMetadataResponse)(nil),       // 17: quidditch.master.IndexMetadataResponse
-	(*IndexMetadata)(nil),               // 18: quidditch.master.IndexMetadata
-	(*IndexSettings)(nil),               // 19: quidditch.master.IndexSettings
-	(*CompressionSettings)(nil),         // 20: quidditch.master.CompressionSettings
-	(*TieringSettings)(nil),             // 21: quidditch.master.TieringSettings
-	(*FieldMapping)(nil),                // 22: quidditch.master.FieldMapping
-	(*AllocateShardRequest)(nil),        // 23: quidditch.master.AllocateShardRequest
-	(*AllocateShardResponse)(nil),       // 24: quidditch.master.AllocateShardResponse
-	(*RebalanceShardsRequest)(nil),      // 25: quidditch.master.RebalanceShardsRequest
-	(*RebalanceShardsResponse)(nil),     // 26: quidditch.master.RebalanceShardsResponse
-	(*ShardRelocation)(nil),             // 27: quidditch.master.ShardRelocation
-	(*RoutingTable)(nil),                // 28: quidditch.master.RoutingTable
-	(*IndexRoutingTable)(nil),           // 29: quidditch.master.IndexRoutingTable
-	(*ShardRouting)(nil),                // 30: quidditch.master.ShardRouting
-	(*ShardAllocation)(nil),             // 31: quidditch.master.ShardAllocation
-	(*RegisterNodeRequest)(nil),         // 32: quidditch.master.RegisterNodeRequest
-	(*RegisterNodeResponse)(nil),        // 33: quidditch.master.RegisterNodeResponse
-	(*UnregisterNodeRequest)(nil),       // 34: quidditch.master.UnregisterNodeRequest
-	(*UnregisterNodeResponse)(nil),      // 35: quidditch.master.UnregisterNodeResponse
-	(*NodeHeartbeatRequest)(nil),        // 36: quidditch.master.NodeHeartbeatRequest
-	(*NodeHeartbeatResponse)(nil),       // 37: quidditch.master.NodeHeartbeatResponse
-	(*NodeInfo)(nil),                    // 38: quidditch.master.NodeInfo
-	(*NodeAttributes)(nil),              // 39: quidditch.master.NodeAttributes
-	(*NodeStats)(nil),                   // 40: quidditch.master.NodeStats
-	(*MasterNode)(nil),                  // 41: quidditch.master.MasterNode
-	nil,                                 // 42: quidditch.master.CreateIndexRequest.MappingsEntry
-	nil,                                 // 43: quidditch.master.CreateIndexRequest.AliasesEntry
-	nil,                                 // 44: quidditch.master.IndexMetadata.MappingsEntry
-	nil,                                 // 45: quidditch.master.IndexMetadata.AliasesEntry
-	nil,                                 // 46: quidditch.master.TieringSettings.TierRulesEntry
-	nil,                                 // 47: quidditch.master.FieldMapping.PropertiesEntry
-	nil,                                 // 48: quidditch.master.RoutingTable.IndicesEntry
-	nil,                                 // 49: quidditch.master.IndexRoutingTable.ShardsEntry
-	nil,                                 // 50: quidditch.master.NodeAttributes.LabelsEntry
+	(ClusterStatus)(0),                  // 0: conjugate.master.ClusterStatus
+	(NodeType)(0),                       // 1: conjugate.master.NodeType
+	(NodeStatus)(0),                     // 2: conjugate.master.NodeStatus
+	(ClusterStateEvent_EventType)(0),    // 3: conjugate.master.ClusterStateEvent.EventType
+	(IndexMetadata_IndexState)(0),       // 4: conjugate.master.IndexMetadata.IndexState
+	(ShardAllocation_ShardState)(0),     // 5: conjugate.master.ShardAllocation.ShardState
+	(*GetClusterStateRequest)(nil),      // 6: conjugate.master.GetClusterStateRequest
+	(*ClusterStateResponse)(nil),        // 7: conjugate.master.ClusterStateResponse
+	(*WatchClusterStateRequest)(nil),    // 8: conjugate.master.WatchClusterStateRequest
+	(*ClusterStateEvent)(nil),           // 9: conjugate.master.ClusterStateEvent
+	(*CreateIndexRequest)(nil),          // 10: conjugate.master.CreateIndexRequest
+	(*CreateIndexResponse)(nil),         // 11: conjugate.master.CreateIndexResponse
+	(*DeleteIndexRequest)(nil),          // 12: conjugate.master.DeleteIndexRequest
+	(*DeleteIndexResponse)(nil),         // 13: conjugate.master.DeleteIndexResponse
+	(*UpdateIndexSettingsRequest)(nil),  // 14: conjugate.master.UpdateIndexSettingsRequest
+	(*UpdateIndexSettingsResponse)(nil), // 15: conjugate.master.UpdateIndexSettingsResponse
+	(*GetIndexMetadataRequest)(nil),     // 16: conjugate.master.GetIndexMetadataRequest
+	(*IndexMetadataResponse)(nil),       // 17: conjugate.master.IndexMetadataResponse
+	(*IndexMetadata)(nil),               // 18: conjugate.master.IndexMetadata
+	(*IndexSettings)(nil),               // 19: conjugate.master.IndexSettings
+	(*CompressionSettings)(nil),         // 20: conjugate.master.CompressionSettings
+	(*TieringSettings)(nil),             // 21: conjugate.master.TieringSettings
+	(*FieldMapping)(nil),                // 22: conjugate.master.FieldMapping
+	(*AllocateShardRequest)(nil),        // 23: conjugate.master.AllocateShardRequest
+	(*AllocateShardResponse)(nil),       // 24: conjugate.master.AllocateShardResponse
+	(*RebalanceShardsRequest)(nil),      // 25: conjugate.master.RebalanceShardsRequest
+	(*RebalanceShardsResponse)(nil),     // 26: conjugate.master.RebalanceShardsResponse
+	(*ShardRelocation)(nil),             // 27: conjugate.master.ShardRelocation
+	(*RoutingTable)(nil),                // 28: conjugate.master.RoutingTable
+	(*IndexRoutingTable)(nil),           // 29: conjugate.master.IndexRoutingTable
+	(*ShardRouting)(nil),                // 30: conjugate.master.ShardRouting
+	(*ShardAllocation)(nil),             // 31: conjugate.master.ShardAllocation
+	(*RegisterNodeRequest)(nil),         // 32: conjugate.master.RegisterNodeRequest
+	(*RegisterNodeResponse)(nil),        // 33: conjugate.master.RegisterNodeResponse
+	(*UnregisterNodeRequest)(nil),       // 34: conjugate.master.UnregisterNodeRequest
+	(*UnregisterNodeResponse)(nil),      // 35: conjugate.master.UnregisterNodeResponse
+	(*NodeHeartbeatRequest)(nil),        // 36: conjugate.master.NodeHeartbeatRequest
+	(*NodeHeartbeatResponse)(nil),       // 37: conjugate.master.NodeHeartbeatResponse
+	(*NodeInfo)(nil),                    // 38: conjugate.master.NodeInfo
+	(*NodeAttributes)(nil),              // 39: conjugate.master.NodeAttributes
+	(*NodeStats)(nil),                   // 40: conjugate.master.NodeStats
+	(*MasterNode)(nil),                  // 41: conjugate.master.MasterNode
+	nil,                                 // 42: conjugate.master.CreateIndexRequest.MappingsEntry
+	nil,                                 // 43: conjugate.master.CreateIndexRequest.AliasesEntry
+	nil,                                 // 44: conjugate.master.IndexMetadata.MappingsEntry
+	nil,                                 // 45: conjugate.master.IndexMetadata.AliasesEntry
+	nil,                                 // 46: conjugate.master.TieringSettings.TierRulesEntry
+	nil,                                 // 47: conjugate.master.FieldMapping.PropertiesEntry
+	nil,                                 // 48: conjugate.master.RoutingTable.IndicesEntry
+	nil,                                 // 49: conjugate.master.IndexRoutingTable.ShardsEntry
+	nil,                                 // 50: conjugate.master.NodeAttributes.LabelsEntry
 	(*timestamppb.Timestamp)(nil),       // 51: google.protobuf.Timestamp
 }
 var file_pkg_common_proto_master_proto_depIdxs = []int32{
-	0,  // 0: quidditch.master.ClusterStateResponse.status:type_name -> quidditch.master.ClusterStatus
-	18, // 1: quidditch.master.ClusterStateResponse.indices:type_name -> quidditch.master.IndexMetadata
-	28, // 2: quidditch.master.ClusterStateResponse.routing_table:type_name -> quidditch.master.RoutingTable
-	38, // 3: quidditch.master.ClusterStateResponse.nodes:type_name -> quidditch.master.NodeInfo
-	41, // 4: quidditch.master.ClusterStateResponse.master_node:type_name -> quidditch.master.MasterNode
-	3,  // 5: quidditch.master.ClusterStateEvent.type:type_name -> quidditch.master.ClusterStateEvent.EventType
-	19, // 6: quidditch.master.CreateIndexRequest.settings:type_name -> quidditch.master.IndexSettings
-	42, // 7: quidditch.master.CreateIndexRequest.mappings:type_name -> quidditch.master.CreateIndexRequest.MappingsEntry
-	43, // 8: quidditch.master.CreateIndexRequest.aliases:type_name -> quidditch.master.CreateIndexRequest.AliasesEntry
-	19, // 9: quidditch.master.UpdateIndexSettingsRequest.settings:type_name -> quidditch.master.IndexSettings
-	18, // 10: quidditch.master.IndexMetadataResponse.metadata:type_name -> quidditch.master.IndexMetadata
-	19, // 11: quidditch.master.IndexMetadata.settings:type_name -> quidditch.master.IndexSettings
-	44, // 12: quidditch.master.IndexMetadata.mappings:type_name -> quidditch.master.IndexMetadata.MappingsEntry
-	45, // 13: quidditch.master.IndexMetadata.aliases:type_name -> quidditch.master.IndexMetadata.AliasesEntry
-	4,  // 14: quidditch.master.IndexMetadata.state:type_name -> quidditch.master.IndexMetadata.IndexState
-	51, // 15: quidditch.master.IndexMetadata.created_at:type_name -> google.protobuf.Timestamp
-	20, // 16: quidditch.master.IndexSettings.compression:type_name -> quidditch.master.CompressionSettings
-	21, // 17: quidditch.master.IndexSettings.tiering:type_name -> quidditch.master.TieringSettings
-	46, // 18: quidditch.master.TieringSettings.tier_rules:type_name -> quidditch.master.TieringSettings.TierRulesEntry
-	47, // 19: quidditch.master.FieldMapping.properties:type_name -> quidditch.master.FieldMapping.PropertiesEntry
-	31, // 20: quidditch.master.AllocateShardResponse.allocation:type_name -> quidditch.master.ShardAllocation
-	27, // 21: quidditch.master.RebalanceShardsResponse.relocations:type_name -> quidditch.master.ShardRelocation
-	48, // 22: quidditch.master.RoutingTable.indices:type_name -> quidditch.master.RoutingTable.IndicesEntry
-	49, // 23: quidditch.master.IndexRoutingTable.shards:type_name -> quidditch.master.IndexRoutingTable.ShardsEntry
-	31, // 24: quidditch.master.ShardRouting.allocation:type_name -> quidditch.master.ShardAllocation
-	5,  // 25: quidditch.master.ShardAllocation.state:type_name -> quidditch.master.ShardAllocation.ShardState
-	51, // 26: quidditch.master.ShardAllocation.allocated_at:type_name -> google.protobuf.Timestamp
-	1,  // 27: quidditch.master.RegisterNodeRequest.node_type:type_name -> quidditch.master.NodeType
-	39, // 28: quidditch.master.RegisterNodeRequest.attributes:type_name -> quidditch.master.NodeAttributes
-	40, // 29: quidditch.master.NodeHeartbeatRequest.stats:type_name -> quidditch.master.NodeStats
-	1,  // 30: quidditch.master.NodeInfo.node_type:type_name -> quidditch.master.NodeType
-	39, // 31: quidditch.master.NodeInfo.attributes:type_name -> quidditch.master.NodeAttributes
-	2,  // 32: quidditch.master.NodeInfo.status:type_name -> quidditch.master.NodeStatus
-	51, // 33: quidditch.master.NodeInfo.joined_at:type_name -> google.protobuf.Timestamp
-	51, // 34: quidditch.master.NodeInfo.last_seen:type_name -> google.protobuf.Timestamp
-	50, // 35: quidditch.master.NodeAttributes.labels:type_name -> quidditch.master.NodeAttributes.LabelsEntry
-	51, // 36: quidditch.master.MasterNode.elected_at:type_name -> google.protobuf.Timestamp
-	22, // 37: quidditch.master.CreateIndexRequest.MappingsEntry.value:type_name -> quidditch.master.FieldMapping
-	22, // 38: quidditch.master.IndexMetadata.MappingsEntry.value:type_name -> quidditch.master.FieldMapping
-	22, // 39: quidditch.master.FieldMapping.PropertiesEntry.value:type_name -> quidditch.master.FieldMapping
-	29, // 40: quidditch.master.RoutingTable.IndicesEntry.value:type_name -> quidditch.master.IndexRoutingTable
-	30, // 41: quidditch.master.IndexRoutingTable.ShardsEntry.value:type_name -> quidditch.master.ShardRouting
-	6,  // 42: quidditch.master.MasterService.GetClusterState:input_type -> quidditch.master.GetClusterStateRequest
-	8,  // 43: quidditch.master.MasterService.WatchClusterState:input_type -> quidditch.master.WatchClusterStateRequest
-	10, // 44: quidditch.master.MasterService.CreateIndex:input_type -> quidditch.master.CreateIndexRequest
-	12, // 45: quidditch.master.MasterService.DeleteIndex:input_type -> quidditch.master.DeleteIndexRequest
-	14, // 46: quidditch.master.MasterService.UpdateIndexSettings:input_type -> quidditch.master.UpdateIndexSettingsRequest
-	16, // 47: quidditch.master.MasterService.GetIndexMetadata:input_type -> quidditch.master.GetIndexMetadataRequest
-	23, // 48: quidditch.master.MasterService.AllocateShard:input_type -> quidditch.master.AllocateShardRequest
-	25, // 49: quidditch.master.MasterService.RebalanceShards:input_type -> quidditch.master.RebalanceShardsRequest
-	32, // 50: quidditch.master.MasterService.RegisterNode:input_type -> quidditch.master.RegisterNodeRequest
-	34, // 51: quidditch.master.MasterService.UnregisterNode:input_type -> quidditch.master.UnregisterNodeRequest
-	36, // 52: quidditch.master.MasterService.NodeHeartbeat:input_type -> quidditch.master.NodeHeartbeatRequest
-	7,  // 53: quidditch.master.MasterService.GetClusterState:output_type -> quidditch.master.ClusterStateResponse
-	9,  // 54: quidditch.master.MasterService.WatchClusterState:output_type -> quidditch.master.ClusterStateEvent
-	11, // 55: quidditch.master.MasterService.CreateIndex:output_type -> quidditch.master.CreateIndexResponse
-	13, // 56: quidditch.master.MasterService.DeleteIndex:output_type -> quidditch.master.DeleteIndexResponse
-	15, // 57: quidditch.master.MasterService.UpdateIndexSettings:output_type -> quidditch.master.UpdateIndexSettingsResponse
-	17, // 58: quidditch.master.MasterService.GetIndexMetadata:output_type -> quidditch.master.IndexMetadataResponse
-	24, // 59: quidditch.master.MasterService.AllocateShard:output_type -> quidditch.master.AllocateShardResponse
-	26, // 60: quidditch.master.MasterService.RebalanceShards:output_type -> quidditch.master.RebalanceShardsResponse
-	33, // 61: quidditch.master.MasterService.RegisterNode:output_type -> quidditch.master.RegisterNodeResponse
-	35, // 62: quidditch.master.MasterService.UnregisterNode:output_type -> quidditch.master.UnregisterNodeResponse
-	37, // 63: quidditch.master.MasterService.NodeHeartbeat:output_type -> quidditch.master.NodeHeartbeatResponse
+	0,  // 0: conjugate.master.ClusterStateResponse.status:type_name -> conjugate.master.ClusterStatus
+	18, // 1: conjugate.master.ClusterStateResponse.indices:type_name -> conjugate.master.IndexMetadata
+	28, // 2: conjugate.master.ClusterStateResponse.routing_table:type_name -> conjugate.master.RoutingTable
+	38, // 3: conjugate.master.ClusterStateResponse.nodes:type_name -> conjugate.master.NodeInfo
+	41, // 4: conjugate.master.ClusterStateResponse.master_node:type_name -> conjugate.master.MasterNode
+	3,  // 5: conjugate.master.ClusterStateEvent.type:type_name -> conjugate.master.ClusterStateEvent.EventType
+	19, // 6: conjugate.master.CreateIndexRequest.settings:type_name -> conjugate.master.IndexSettings
+	42, // 7: conjugate.master.CreateIndexRequest.mappings:type_name -> conjugate.master.CreateIndexRequest.MappingsEntry
+	43, // 8: conjugate.master.CreateIndexRequest.aliases:type_name -> conjugate.master.CreateIndexRequest.AliasesEntry
+	19, // 9: conjugate.master.UpdateIndexSettingsRequest.settings:type_name -> conjugate.master.IndexSettings
+	18, // 10: conjugate.master.IndexMetadataResponse.metadata:type_name -> conjugate.master.IndexMetadata
+	19, // 11: conjugate.master.IndexMetadata.settings:type_name -> conjugate.master.IndexSettings
+	44, // 12: conjugate.master.IndexMetadata.mappings:type_name -> conjugate.master.IndexMetadata.MappingsEntry
+	45, // 13: conjugate.master.IndexMetadata.aliases:type_name -> conjugate.master.IndexMetadata.AliasesEntry
+	4,  // 14: conjugate.master.IndexMetadata.state:type_name -> conjugate.master.IndexMetadata.IndexState
+	51, // 15: conjugate.master.IndexMetadata.created_at:type_name -> google.protobuf.Timestamp
+	20, // 16: conjugate.master.IndexSettings.compression:type_name -> conjugate.master.CompressionSettings
+	21, // 17: conjugate.master.IndexSettings.tiering:type_name -> conjugate.master.TieringSettings
+	46, // 18: conjugate.master.TieringSettings.tier_rules:type_name -> conjugate.master.TieringSettings.TierRulesEntry
+	47, // 19: conjugate.master.FieldMapping.properties:type_name -> conjugate.master.FieldMapping.PropertiesEntry
+	31, // 20: conjugate.master.AllocateShardResponse.allocation:type_name -> conjugate.master.ShardAllocation
+	27, // 21: conjugate.master.RebalanceShardsResponse.relocations:type_name -> conjugate.master.ShardRelocation
+	48, // 22: conjugate.master.RoutingTable.indices:type_name -> conjugate.master.RoutingTable.IndicesEntry
+	49, // 23: conjugate.master.IndexRoutingTable.shards:type_name -> conjugate.master.IndexRoutingTable.ShardsEntry
+	31, // 24: conjugate.master.ShardRouting.allocation:type_name -> conjugate.master.ShardAllocation
+	5,  // 25: conjugate.master.ShardAllocation.state:type_name -> conjugate.master.ShardAllocation.ShardState
+	51, // 26: conjugate.master.ShardAllocation.allocated_at:type_name -> google.protobuf.Timestamp
+	1,  // 27: conjugate.master.RegisterNodeRequest.node_type:type_name -> conjugate.master.NodeType
+	39, // 28: conjugate.master.RegisterNodeRequest.attributes:type_name -> conjugate.master.NodeAttributes
+	40, // 29: conjugate.master.NodeHeartbeatRequest.stats:type_name -> conjugate.master.NodeStats
+	1,  // 30: conjugate.master.NodeInfo.node_type:type_name -> conjugate.master.NodeType
+	39, // 31: conjugate.master.NodeInfo.attributes:type_name -> conjugate.master.NodeAttributes
+	2,  // 32: conjugate.master.NodeInfo.status:type_name -> conjugate.master.NodeStatus
+	51, // 33: conjugate.master.NodeInfo.joined_at:type_name -> google.protobuf.Timestamp
+	51, // 34: conjugate.master.NodeInfo.last_seen:type_name -> google.protobuf.Timestamp
+	50, // 35: conjugate.master.NodeAttributes.labels:type_name -> conjugate.master.NodeAttributes.LabelsEntry
+	51, // 36: conjugate.master.MasterNode.elected_at:type_name -> google.protobuf.Timestamp
+	22, // 37: conjugate.master.CreateIndexRequest.MappingsEntry.value:type_name -> conjugate.master.FieldMapping
+	22, // 38: conjugate.master.IndexMetadata.MappingsEntry.value:type_name -> conjugate.master.FieldMapping
+	22, // 39: conjugate.master.FieldMapping.PropertiesEntry.value:type_name -> conjugate.master.FieldMapping
+	29, // 40: conjugate.master.RoutingTable.IndicesEntry.value:type_name -> conjugate.master.IndexRoutingTable
+	30, // 41: conjugate.master.IndexRoutingTable.ShardsEntry.value:type_name -> conjugate.master.ShardRouting
+	6,  // 42: conjugate.master.MasterService.GetClusterState:input_type -> conjugate.master.GetClusterStateRequest
+	8,  // 43: conjugate.master.MasterService.WatchClusterState:input_type -> conjugate.master.WatchClusterStateRequest
+	10, // 44: conjugate.master.MasterService.CreateIndex:input_type -> conjugate.master.CreateIndexRequest
+	12, // 45: conjugate.master.MasterService.DeleteIndex:input_type -> conjugate.master.DeleteIndexRequest
+	14, // 46: conjugate.master.MasterService.UpdateIndexSettings:input_type -> conjugate.master.UpdateIndexSettingsRequest
+	16, // 47: conjugate.master.MasterService.GetIndexMetadata:input_type -> conjugate.master.GetIndexMetadataRequest
+	23, // 48: conjugate.master.MasterService.AllocateShard:input_type -> conjugate.master.AllocateShardRequest
+	25, // 49: conjugate.master.MasterService.RebalanceShards:input_type -> conjugate.master.RebalanceShardsRequest
+	32, // 50: conjugate.master.MasterService.RegisterNode:input_type -> conjugate.master.RegisterNodeRequest
+	34, // 51: conjugate.master.MasterService.UnregisterNode:input_type -> conjugate.master.UnregisterNodeRequest
+	36, // 52: conjugate.master.MasterService.NodeHeartbeat:input_type -> conjugate.master.NodeHeartbeatRequest
+	7,  // 53: conjugate.master.MasterService.GetClusterState:output_type -> conjugate.master.ClusterStateResponse
+	9,  // 54: conjugate.master.MasterService.WatchClusterState:output_type -> conjugate.master.ClusterStateEvent
+	11, // 55: conjugate.master.MasterService.CreateIndex:output_type -> conjugate.master.CreateIndexResponse
+	13, // 56: conjugate.master.MasterService.DeleteIndex:output_type -> conjugate.master.DeleteIndexResponse
+	15, // 57: conjugate.master.MasterService.UpdateIndexSettings:output_type -> conjugate.master.UpdateIndexSettingsResponse
+	17, // 58: conjugate.master.MasterService.GetIndexMetadata:output_type -> conjugate.master.IndexMetadataResponse
+	24, // 59: conjugate.master.MasterService.AllocateShard:output_type -> conjugate.master.AllocateShardResponse
+	26, // 60: conjugate.master.MasterService.RebalanceShards:output_type -> conjugate.master.RebalanceShardsResponse
+	33, // 61: conjugate.master.MasterService.RegisterNode:output_type -> conjugate.master.RegisterNodeResponse
+	35, // 62: conjugate.master.MasterService.UnregisterNode:output_type -> conjugate.master.UnregisterNodeResponse
+	37, // 63: conjugate.master.MasterService.NodeHeartbeat:output_type -> conjugate.master.NodeHeartbeatResponse
 	53, // [53:64] is the sub-list for method output_type
 	42, // [42:53] is the sub-list for method input_type
 	42, // [42:42] is the sub-list for extension type_name

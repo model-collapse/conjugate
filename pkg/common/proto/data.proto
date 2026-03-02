@@ -29,6 +29,9 @@ service DataService {
   // Statistics and health
   rpc GetShardStats(GetShardStatsRequest) returns (ShardStats);
   rpc GetNodeStats(GetNodeStatsRequest) returns (DataNodeStats);
+
+  // Index optimization
+  rpc ForceMerge(ForceMergeRequest) returns (ForceMergeResponse);
 }
 
 // Shard Management Messages
@@ -143,7 +146,7 @@ message BulkIndexRequest {
 
 message BulkIndexItem {
   string doc_id = 1;
-  google.protobuf.Struct document = 2;
+  bytes document_json = 2;  // Raw JSON bytes pass-through
 }
 
 message BulkIndexResponse {
@@ -270,6 +273,8 @@ message ShardStats {
   int64 search_queries_time_millis = 8;
   int64 indexing_total = 9;
   int64 indexing_time_millis = 10;
+  int32 segment_count = 11;  // Number of Lucene segments
+  int64 max_doc = 12;         // Maximum document ID
 }
 
 message GetNodeStatsRequest {
@@ -286,4 +291,20 @@ message DataNodeStats {
   double disk_usage_percent = 7;
   int64 uptime_seconds = 8;
   repeated ShardStats shards = 9;
+}
+
+// Force Merge Messages
+
+message ForceMergeRequest {
+  string index_name = 1;
+  int32 shard_id = 2;
+  int32 max_segments = 3;  // Target number of segments (1 = full optimization)
+  bool flush = 4;          // Flush before merge (default: true)
+}
+
+message ForceMergeResponse {
+  bool acknowledged = 1;
+  int32 segments_before = 2;  // Segment count before merge
+  int32 segments_after = 3;   // Segment count after merge
+  int64 duration_millis = 4;  // Time taken for merge
 }

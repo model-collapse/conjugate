@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/conjugate/conjugate/pkg/common/config"
+	_ "github.com/conjugate/conjugate/pkg/common/vtcodec" // register vtprotobuf gRPC codec
 	"github.com/conjugate/conjugate/pkg/coordination"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -71,6 +74,14 @@ func run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		logger.Fatal("Failed to create coordination node", zap.Error(err))
 	}
+
+	// Start pprof HTTP server for profiling
+	go func() {
+		logger.Info("Starting pprof profiling server", zap.String("addr", "localhost:6060"))
+		if err := http.ListenAndServe("localhost:6060", nil); err != nil {
+			logger.Error("pprof server failed", zap.Error(err))
+		}
+	}()
 
 	// Start coordination node
 	if err := coordNode.Start(ctx); err != nil {

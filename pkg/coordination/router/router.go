@@ -2,12 +2,12 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 
 	pb "github.com/conjugate/conjugate/pkg/common/proto"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // DataNodeClient interface for communication with data nodes
@@ -114,8 +114,9 @@ func (dr *DocumentRouter) RouteIndexDocument(ctx context.Context, indexName, doc
 
 // BulkDocItem represents a document to be indexed in a bulk operation
 type BulkDocItem struct {
-	DocID    string
-	Document map[string]interface{}
+	DocID        string
+	Document     map[string]interface{}
+	DocumentJSON []byte // Raw JSON bytes for zero-copy pass-through
 }
 
 // BulkResultItem represents the result of indexing a single document
@@ -200,18 +201,24 @@ func (dr *DocumentRouter) RouteBulkIndex(ctx context.Context, indexName string, 
 			shardBatches[shardID] = batch
 		}
 
-		// Convert document to protobuf Struct
-		docStruct, err := structpb.NewStruct(doc.Document)
-		if err != nil {
-			results[i].Success = false
-			results[i].Error = fmt.Sprintf("failed to convert document: %v", err)
-			continue
+		// Use raw JSON bytes for zero-copy pass-through (skip structpb conversion)
+		var jsonBytes []byte
+		if len(doc.DocumentJSON) > 0 {
+			jsonBytes = doc.DocumentJSON
+		} else {
+			// Fallback: marshal from map if raw bytes not available
+			jsonBytes, err = json.Marshal(doc.Document)
+			if err != nil {
+				results[i].Success = false
+				results[i].Error = fmt.Sprintf("failed to marshal document: %v", err)
+				continue
+			}
 		}
 
 		batch.indices = append(batch.indices, i)
 		batch.items = append(batch.items, &pb.BulkIndexItem{
-			DocId:    doc.DocID,
-			Document: docStruct,
+			DocId:        doc.DocID,
+			DocumentJson: jsonBytes,
 		})
 	}
 
