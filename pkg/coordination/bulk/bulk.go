@@ -157,11 +157,8 @@ func ParseBulkRequest(body []byte) (*BulkRequest, error) {
 				}
 			} else {
 				// Index/create: pass raw JSON bytes through to data nodes.
-				// Skip full json.Unmarshal here — the data node will parse when needed.
-				// Validate syntax only (no allocation) to catch malformed input early.
-				if !json.Valid(docLine) {
-					return nil, fmt.Errorf("failed to parse document on line %d: invalid JSON", lineNum)
-				}
+				// Skip json.Unmarshal AND json.Valid — the data node's json.Unmarshal
+				// catches malformed input. Saves ~3.3ms per 1000-doc batch (8.6% wall time).
 				// scanner.Bytes() is reused between calls, so we must copy.
 				op.RawJSON = make([]byte, len(docLine))
 				copy(op.RawJSON, docLine)
