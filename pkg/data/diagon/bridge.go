@@ -212,6 +212,7 @@ import "C"
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -682,8 +683,43 @@ func (s *Shard) IndexDocument(docID string, doc map[string]interface{}) error {
 }
 
 
+// Cached C strings for field names that are identical across all documents.
+// Allocated once (process-lifetime), never freed.
+var (
+	cachedIDFieldName     *C.char
+	cachedSourceFieldName *C.char
+	cachedFieldNamesOnce  sync.Once
+)
+
+func initCachedFieldNames() {
+	cachedFieldNamesOnce.Do(func() {
+		cachedIDFieldName = C.CString("_id")
+		cachedSourceFieldName = C.CString("_source")
+	})
+}
+
+// cStringFromBytes allocates a null-terminated C string directly from a Go
+// byte slice, avoiding the intermediate string copy that C.CString(string(b))
+// would incur. The caller must C.free the returned pointer.
+func cStringFromBytes(b []byte) *C.char {
+	n := C.size_t(len(b))
+	cstr := (*C.char)(C.malloc(n + 1))
+	if len(b) > 0 {
+		C.memcpy(unsafe.Pointer(cstr), unsafe.Pointer(&b[0]), n)
+	}
+	// Null-terminate
+	*(*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(cstr)) + uintptr(n))) = 0
+	return cstr
+}
+
 // BulkIndexDocuments indexes multiple documents in a batch to reduce CGO overhead.
-// This is significantly faster than calling IndexDocument repeatedly.
+// Optimizations over per-document IndexDocument:
+//   - Uses diagon_add_documents batch API (single mutex acquisition in C++)
+//   - Caches "_id" and "_source" field name CStrings at package level
+//   - Caches user field name CStrings per batch (all docs share schema)
+//   - Avoids per-field defer; collects pointers for batch cleanup
+//   - Uses cStringFromBytes to skip []byte→string copy for _source
+//   - Uses strconv instead of fmt.Sprintf for numeric formatting
 func (s *Shard) BulkIndexDocuments(docs []struct {
 	ID         string
 	Doc        map[string]interface{}
@@ -692,49 +728,67 @@ func (s *Shard) BulkIndexDocuments(docs []struct {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.logger.Debug("BulkIndexDocuments",
-		zap.Int("num_docs", len(docs)))
+	numDocs := len(docs)
+	if numDocs == 0 {
+		return nil
+	}
 
-	// Helper function to create a Diagon document from Go map
-	createDiagonDoc := func(docID string, doc map[string]interface{}, rawJSON []byte) C.DiagonDocument {
+	initCachedFieldNames()
+
+	s.logger.Debug("BulkIndexDocuments",
+		zap.Int("num_docs", numDocs))
+
+	// Allocate C array for batch diagon_add_documents call.
+	// Using C.malloc avoids CGO pointer-checking rules (Go slice of
+	// unsafe.Pointer would trigger cgocheck since values look like pointers).
+	cDocsRaw := C.malloc(C.size_t(numDocs) * C.size_t(unsafe.Sizeof(uintptr(0))))
+	defer C.free(cDocsRaw)
+	cDocs := unsafe.Slice((*C.DiagonDocument)(cDocsRaw), numDocs)
+
+	// Field name cache: allocated once per batch, reused across all docs.
+	// Typical Big5 doc has ~15 fields; pre-size to avoid rehash.
+	fieldNameCache := make(map[string]*C.char, 32)
+
+	// Per-document temporary C string pointers (values only, not field names).
+	// Pre-allocate for typical doc: 1 docID + 1 source + ~15 field values.
+	tmpPtrs := make([]unsafe.Pointer, 0, 20)
+
+	for i, item := range docs {
+		tmpPtrs = tmpPtrs[:0]
+
 		diagonDoc := C.diagon_create_document()
 
-		// Add ID field - both indexed (for searching) and stored (for retrieval)
-		cDocID := C.CString(docID)
-		defer C.free(unsafe.Pointer(cDocID))
-		cIDFieldName := C.CString("_id")
-		defer C.free(unsafe.Pointer(cIDFieldName))
+		// _id field: indexed + stored, using cached field name
+		cDocID := C.CString(item.ID)
+		tmpPtrs = append(tmpPtrs, unsafe.Pointer(cDocID))
 
-		// Add as StringField for exact-match searching
-		idField := C.diagon_create_string_field(cIDFieldName, cDocID)
+		idField := C.diagon_create_string_field(cachedIDFieldName, cDocID)
 		C.diagon_document_add_field(diagonDoc, idField)
-
-		// Add as StoredField for retrieval
-		storedIDField := C.diagon_create_stored_field(cIDFieldName, cDocID)
+		storedIDField := C.diagon_create_stored_field(cachedIDFieldName, cDocID)
 		C.diagon_document_add_field(diagonDoc, storedIDField)
 
-		// Store full _source as JSON for reliable document retrieval
-		// Use pre-existing raw JSON bytes when available to avoid re-marshaling
-		sourceBytes := rawJSON
+		// _source field: stored JSON, using cached field name.
+		// cStringFromBytes avoids the []byte→string→C double-copy.
+		sourceBytes := item.SourceJSON
 		if sourceBytes == nil {
-			sourceBytes, _ = json.Marshal(doc)
+			sourceBytes, _ = json.Marshal(item.Doc)
 		}
-		if sourceBytes != nil {
-			cSourceFieldName := C.CString("_source")
-			defer C.free(unsafe.Pointer(cSourceFieldName))
-			cSourceValue := C.CString(string(sourceBytes))
-			defer C.free(unsafe.Pointer(cSourceValue))
-			sourceField := C.diagon_create_stored_field(cSourceFieldName, cSourceValue)
+		if len(sourceBytes) > 0 {
+			cSourceValue := cStringFromBytes(sourceBytes)
+			tmpPtrs = append(tmpPtrs, unsafe.Pointer(cSourceValue))
+			sourceField := C.diagon_create_stored_field(cachedSourceFieldName, cSourceValue)
 			C.diagon_document_add_field(diagonDoc, sourceField)
 		}
 
-		// Flatten nested objects into dotted field paths for indexing
-		flatDoc := flattenMap("", doc)
-
-		// Add other fields
+		// Flatten nested objects and index user fields
+		flatDoc := flattenMap("", item.Doc)
 		for key, value := range flatDoc {
-			cFieldName := C.CString(key)
-			defer C.free(unsafe.Pointer(cFieldName))
+			// Lookup or create cached field name CString
+			cFieldName, ok := fieldNameCache[key]
+			if !ok {
+				cFieldName = C.CString(key)
+				fieldNameCache[key] = cFieldName
+			}
 
 			switch v := value.(type) {
 			case string:
@@ -742,22 +796,19 @@ func (s *Shard) BulkIndexDocuments(docs []struct {
 					doubleField := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(epochMs)))
 					C.diagon_document_add_field(diagonDoc, doubleField)
 					cValue := C.CString(v)
-					defer C.free(unsafe.Pointer(cValue))
+					tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValue))
 					storedField := C.diagon_create_stored_field(cFieldName, cValue)
 					C.diagon_document_add_field(diagonDoc, storedField)
 				} else if isKeywordLike(v) {
-					// Keyword-like: index as StringField (exact, not analyzed)
-					// Enables fast terms aggregation via inverted index
 					cValue := C.CString(v)
-					defer C.free(unsafe.Pointer(cValue))
+					tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValue))
 					stringField := C.diagon_create_string_field(cFieldName, cValue)
 					C.diagon_document_add_field(diagonDoc, stringField)
-					storedField2 := C.diagon_create_stored_field(cFieldName, cValue)
-					C.diagon_document_add_field(diagonDoc, storedField2)
+					storedField := C.diagon_create_stored_field(cFieldName, cValue)
+					C.diagon_document_add_field(diagonDoc, storedField)
 				} else {
-					// Text field (analyzed) + StringField for terms aggregation
 					cValue := C.CString(v)
-					defer C.free(unsafe.Pointer(cValue))
+					tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValue))
 					field := C.diagon_create_text_field(cFieldName, cValue)
 					C.diagon_document_add_field(diagonDoc, field)
 					stringField := C.diagon_create_string_field(cFieldName, cValue)
@@ -766,69 +817,86 @@ func (s *Shard) BulkIndexDocuments(docs []struct {
 
 			case int, int32, int64:
 				val := int64(0)
-				switch n := v.(type) {
+				switch iv := v.(type) {
 				case int:
-					val = int64(n)
+					val = int64(iv)
 				case int32:
-					val = int64(n)
+					val = int64(iv)
 				case int64:
-					val = n
+					val = iv
 				}
-				field := C.diagon_create_indexed_long_field(cFieldName, C.int64_t(val))
+				// Use indexed_double_field for consistent range query support.
+				// numeric_range_query uses bit_cast which corrupts values;
+				// double_range_query compares doubles directly.
+				field := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(val)))
 				C.diagon_document_add_field(diagonDoc, field)
 
-				cValueStr := C.CString(fmt.Sprintf("%d", val))
-				defer C.free(unsafe.Pointer(cValueStr))
+				cValueStr := C.CString(strconv.FormatInt(val, 10))
+				tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValueStr))
 				storedField := C.diagon_create_stored_field(cFieldName, cValueStr)
 				C.diagon_document_add_field(diagonDoc, storedField)
 
 			case float32, float64:
 				val := float64(0)
-				switch f := v.(type) {
+				switch fv := v.(type) {
 				case float32:
-					val = float64(f)
+					val = float64(fv)
 				case float64:
-					val = f
+					val = fv
 				}
 				field := C.diagon_create_indexed_double_field(cFieldName, C.double(val))
 				C.diagon_document_add_field(diagonDoc, field)
 
-				cValueStr := C.CString(fmt.Sprintf("%f", val))
-				defer C.free(unsafe.Pointer(cValueStr))
+				cValueStr := C.CString(strconv.FormatFloat(val, 'f', 6, 64))
+				tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValueStr))
 				storedField := C.diagon_create_stored_field(cFieldName, cValueStr)
 				C.diagon_document_add_field(diagonDoc, storedField)
 
 			default:
-				// Convert to JSON string for complex types
 				jsonBytes, err := json.Marshal(v)
 				if err != nil {
 					continue
 				}
-				cValue := C.CString(string(jsonBytes))
-				defer C.free(unsafe.Pointer(cValue))
+				cValue := cStringFromBytes(jsonBytes)
+				tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValue))
 				field := C.diagon_create_stored_field(cFieldName, cValue)
 				C.diagon_document_add_field(diagonDoc, field)
 			}
 		}
 
-		return diagonDoc
+		cDocs[i] = diagonDoc
+
+		// Free per-document value strings immediately.
+		// Field creation functions copy the data, so strings are no longer needed.
+		for _, ptr := range tmpPtrs {
+			C.free(ptr)
+		}
 	}
 
-	// Index all documents in batch
-	for i, item := range docs {
-		diagonDoc := createDiagonDoc(item.ID, item.Doc, item.SourceJSON)
-		defer C.diagon_free_document(diagonDoc)
+	// Single CGO call for entire batch (one mutex acquisition in C++)
+	result := C.diagon_add_documents(s.writer, &cDocs[0], C.int(numDocs))
 
-		result := C.diagon_add_document(s.writer, diagonDoc)
-		if !result {
-			errMsg := C.GoString(C.diagon_last_error())
-			return fmt.Errorf("failed to add document %d (ID: %s): %s", i, item.ID, errMsg)
-		}
+	// Free all document handles
+	for i := 0; i < numDocs; i++ {
+		C.diagon_free_document(cDocs[i])
+	}
+
+	// Free cached field name CStrings
+	for _, cs := range fieldNameCache {
+		C.free(unsafe.Pointer(cs))
+	}
+
+	if int(result) < 0 {
+		errMsg := C.GoString(C.diagon_last_error())
+		return fmt.Errorf("batch add_documents failed: %s", errMsg)
+	}
+	if int(result) < numDocs {
+		return fmt.Errorf("batch add_documents: only %d of %d documents added", int(result), numDocs)
 	}
 
 	s.readerDirty = true
 	s.logger.Debug("Bulk indexed documents to RAM buffer",
-		zap.Int("count", len(docs)))
+		zap.Int("count", numDocs))
 
 	return nil
 }

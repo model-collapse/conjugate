@@ -21,9 +21,11 @@ func TestParseBulkRequest_Index(t *testing.T) {
 	assert.Equal(t, OperationIndex, op.Type)
 	assert.Equal(t, "test", op.Index)
 	assert.Equal(t, "1", op.ID)
-	assert.NotNil(t, op.Document)
-	assert.Equal(t, "value1", op.Document["field1"])
-	assert.Equal(t, "value2", op.Document["field2"])
+	// Index ops skip json.Unmarshal — Document is nil, RawJSON carries the bytes
+	assert.Nil(t, op.Document)
+	assert.NotNil(t, op.RawJSON)
+	assert.Contains(t, string(op.RawJSON), `"field1":"value1"`)
+	assert.Contains(t, string(op.RawJSON), `"field2":"value2"`)
 }
 
 func TestParseBulkRequest_Create(t *testing.T) {
@@ -39,7 +41,10 @@ func TestParseBulkRequest_Create(t *testing.T) {
 	assert.Equal(t, OperationCreate, op.Type)
 	assert.Equal(t, "test", op.Index)
 	assert.Equal(t, "2", op.ID)
-	assert.Equal(t, "Test Document", op.Document["title"])
+	// Create ops skip json.Unmarshal — Document is nil, RawJSON carries the bytes
+	assert.Nil(t, op.Document)
+	assert.NotNil(t, op.RawJSON)
+	assert.Contains(t, string(op.RawJSON), `"title":"Test Document"`)
 }
 
 func TestParseBulkRequest_Update(t *testing.T) {

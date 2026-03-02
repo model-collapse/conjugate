@@ -3,9 +3,10 @@ package bulk
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
+
+	json "github.com/goccy/go-json"
 )
 
 // OperationType represents the type of bulk operation
@@ -143,21 +144,24 @@ func ParseBulkRequest(body []byte) (*BulkRequest, error) {
 				return nil, fmt.Errorf("empty document body for %s operation on line %d", opType, lineNum-1)
 			}
 
-			var document map[string]interface{}
-			if err := json.Unmarshal(docLine, &document); err != nil {
-				return nil, fmt.Errorf("failed to parse document on line %d: %w", lineNum, err)
-			}
-
 			if opType == OperationUpdate {
-				// For update operations, extract the "doc" field
+				// Update operations need full parse to extract the "doc" field
+				var document map[string]interface{}
+				if err := json.Unmarshal(docLine, &document); err != nil {
+					return nil, fmt.Errorf("failed to parse document on line %d: %w", lineNum, err)
+				}
 				if doc, ok := document["doc"].(map[string]interface{}); ok {
 					op.UpdateDoc = doc
 				} else {
 					op.UpdateDoc = document
 				}
 			} else {
-				op.Document = document
-				// Store raw JSON bytes for zero-copy pass-through to data nodes.
+				// Index/create: pass raw JSON bytes through to data nodes.
+				// Skip full json.Unmarshal here — the data node will parse when needed.
+				// Validate syntax only (no allocation) to catch malformed input early.
+				if !json.Valid(docLine) {
+					return nil, fmt.Errorf("failed to parse document on line %d: invalid JSON", lineNum)
+				}
 				// scanner.Bytes() is reused between calls, so we must copy.
 				op.RawJSON = make([]byte, len(docLine))
 				copy(op.RawJSON, docLine)

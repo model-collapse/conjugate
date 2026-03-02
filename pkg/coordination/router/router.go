@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"sync"
+	"time"
 
 	pb "github.com/conjugate/conjugate/pkg/common/proto"
 	"go.uber.org/zap"
 )
+
+const metadataCacheTTL = 30 * time.Second
 
 // DataNodeClient interface for communication with data nodes
 type DataNodeClient interface {
@@ -26,28 +30,83 @@ type MasterClient interface {
 	GetIndexMetadata(ctx context.Context, indexName string) (*pb.IndexMetadataResponse, error)
 }
 
+// cachedMetadata holds cached index metadata and shard routing with expiry
+type cachedMetadata struct {
+	metadata *pb.IndexMetadataResponse
+	routing  map[int32]*pb.ShardRouting
+	expiry   time.Time
+}
+
 // DocumentRouter routes document operations to the appropriate shards
 type DocumentRouter struct {
-	logger      *zap.Logger
+	logger       *zap.Logger
 	masterClient MasterClient
-	dataClients map[string]DataNodeClient // nodeID -> client
+	dataClients  map[string]DataNodeClient // nodeID -> client
+
+	metadataCache   map[string]*cachedMetadata // indexName -> cached data
+	metadataCacheMu sync.RWMutex
 }
 
 // NewDocumentRouter creates a new document router
 func NewDocumentRouter(masterClient MasterClient, dataClients map[string]DataNodeClient, logger *zap.Logger) *DocumentRouter {
 	return &DocumentRouter{
-		logger:      logger,
-		masterClient: masterClient,
-		dataClients: dataClients,
+		logger:        logger,
+		masterClient:  masterClient,
+		dataClients:   dataClients,
+		metadataCache: make(map[string]*cachedMetadata),
 	}
+}
+
+// getIndexMetadataCached returns cached index metadata, refreshing from master if expired
+func (dr *DocumentRouter) getIndexMetadataCached(ctx context.Context, indexName string) (*pb.IndexMetadataResponse, map[int32]*pb.ShardRouting, error) {
+	now := time.Now()
+
+	// Fast path: check cache under read lock
+	dr.metadataCacheMu.RLock()
+	cached, exists := dr.metadataCache[indexName]
+	if exists && now.Before(cached.expiry) {
+		metadata := cached.metadata
+		routing := cached.routing
+		dr.metadataCacheMu.RUnlock()
+		return metadata, routing, nil
+	}
+	dr.metadataCacheMu.RUnlock()
+
+	// Slow path: fetch from master and update cache
+	metadata, err := dr.masterClient.GetIndexMetadata(ctx, indexName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get index metadata: %w", err)
+	}
+
+	routing, err := dr.masterClient.GetShardRouting(ctx, indexName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get shard routing: %w", err)
+	}
+
+	dr.metadataCacheMu.Lock()
+	dr.metadataCache[indexName] = &cachedMetadata{
+		metadata: metadata,
+		routing:  routing,
+		expiry:   now.Add(metadataCacheTTL),
+	}
+	dr.metadataCacheMu.Unlock()
+
+	return metadata, routing, nil
+}
+
+// InvalidateMetadataCache removes cached metadata for an index (call on shard changes)
+func (dr *DocumentRouter) InvalidateMetadataCache(indexName string) {
+	dr.metadataCacheMu.Lock()
+	delete(dr.metadataCache, indexName)
+	dr.metadataCacheMu.Unlock()
 }
 
 // RouteIndexDocument routes an index document operation to the correct shard
 func (dr *DocumentRouter) RouteIndexDocument(ctx context.Context, indexName, docID string, document map[string]interface{}) (*pb.IndexDocumentResponse, error) {
-	// Get index metadata to determine number of shards
-	metadata, err := dr.masterClient.GetIndexMetadata(ctx, indexName)
+	// Get cached index metadata and shard routing
+	metadata, routing, err := dr.getIndexMetadataCached(ctx, indexName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get index metadata: %w", err)
+		return nil, err
 	}
 
 	numShards := metadata.Metadata.Settings.NumberOfShards
@@ -57,12 +116,6 @@ func (dr *DocumentRouter) RouteIndexDocument(ctx context.Context, indexName, doc
 
 	// Calculate which shard this document belongs to
 	shardID := dr.calculateShardID(docID, numShards)
-
-	// Get shard routing information
-	routing, err := dr.masterClient.GetShardRouting(ctx, indexName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get shard routing: %w", err)
-	}
 
 	shard, exists := routing[shardID]
 	if !exists {
@@ -139,10 +192,10 @@ type BulkIndexClient interface {
 func (dr *DocumentRouter) RouteBulkIndex(ctx context.Context, indexName string, docs []BulkDocItem) ([]BulkResultItem, error) {
 	results := make([]BulkResultItem, len(docs))
 
-	// Get index metadata ONCE for the entire batch
-	metadata, err := dr.masterClient.GetIndexMetadata(ctx, indexName)
+	// Get cached index metadata and shard routing (avoids 2 master RPCs per call)
+	metadata, routing, err := dr.getIndexMetadataCached(ctx, indexName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get index metadata: %w", err)
+		return nil, err
 	}
 
 	numShards := metadata.Metadata.Settings.NumberOfShards
@@ -150,18 +203,12 @@ func (dr *DocumentRouter) RouteBulkIndex(ctx context.Context, indexName string, 
 		return nil, fmt.Errorf("index has no shards configured")
 	}
 
-	// Get shard routing ONCE for the entire batch
-	routing, err := dr.masterClient.GetShardRouting(ctx, indexName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get shard routing: %w", err)
-	}
-
 	// Group documents by shard
 	type shardBatch struct {
-		shardID  int32
-		nodeID   string
-		indices  []int // original indices in docs slice
-		items    []*pb.BulkIndexItem
+		shardID int32
+		nodeID  string
+		indices []int // original indices in docs slice
+		items   []*pb.BulkIndexItem
 	}
 
 	shardBatches := make(map[int32]*shardBatch)
@@ -222,67 +269,17 @@ func (dr *DocumentRouter) RouteBulkIndex(ctx context.Context, indexName string, 
 		})
 	}
 
-	// Send one BulkIndex RPC per shard
+	// Dispatch BulkIndex RPCs in parallel across shards
+	var wg sync.WaitGroup
 	for _, batch := range shardBatches {
-		client, exists := dr.dataClients[batch.nodeID]
-		if !exists {
-			for _, idx := range batch.indices {
-				results[idx].Success = false
-				results[idx].Error = fmt.Sprintf("data node %s not found", batch.nodeID)
-			}
-			continue
-		}
-
-		// Ensure client is connected
-		if !client.IsConnected() {
-			if err := client.Connect(ctx); err != nil {
-				for _, idx := range batch.indices {
-					results[idx].Success = false
-					results[idx].Error = fmt.Sprintf("failed to connect to node %s: %v", batch.nodeID, err)
-				}
-				continue
-			}
-		}
-
-		// Try BulkIndex if client supports it, otherwise fall back to individual calls
-		bulkClient, ok := client.(BulkIndexClient)
-		if ok {
-			resp, err := bulkClient.BulkIndex(ctx, indexName, batch.shardID, batch.items)
-			if err != nil {
-				for _, idx := range batch.indices {
-					results[idx].Success = false
-					results[idx].Error = err.Error()
-				}
-				continue
-			}
-
-			// Map responses back to original indices
-			for j, itemResp := range resp.Items {
-				if j < len(batch.indices) {
-					idx := batch.indices[j]
-					results[idx].Success = itemResp.Acknowledged
-					results[idx].DocID = itemResp.DocId
-					if itemResp.Error != "" {
-						results[idx].Error = itemResp.Error
-					}
-				}
-			}
-		} else {
-			// Fallback: individual IndexDocument calls
-			for j, item := range batch.items {
-				idx := batch.indices[j]
-				docMap := docs[idx].Document
-				resp, err := client.IndexDocument(ctx, indexName, batch.shardID, item.DocId, docMap)
-				if err != nil {
-					results[idx].Success = false
-					results[idx].Error = err.Error()
-				} else {
-					results[idx].Success = true
-					results[idx].Version = resp.Version
-				}
-			}
-		}
+		batch := batch // capture loop variable
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			dr.dispatchShardBulk(ctx, indexName, batch.shardID, batch.nodeID, batch.indices, batch.items, docs, results)
+		}()
 	}
+	wg.Wait()
 
 	dr.logger.Debug("Bulk index routed",
 		zap.String("index", indexName),
@@ -292,12 +289,84 @@ func (dr *DocumentRouter) RouteBulkIndex(ctx context.Context, indexName string, 
 	return results, nil
 }
 
+// dispatchShardBulk sends a BulkIndex RPC for a single shard and writes results back.
+// Each goroutine writes to disjoint indices in the results slice, so no synchronization is needed.
+func (dr *DocumentRouter) dispatchShardBulk(ctx context.Context, indexName string, shardID int32, nodeID string, indices []int, items []*pb.BulkIndexItem, docs []BulkDocItem, results []BulkResultItem) {
+	client, exists := dr.dataClients[nodeID]
+	if !exists {
+		for _, idx := range indices {
+			results[idx].Success = false
+			results[idx].Error = fmt.Sprintf("data node %s not found", nodeID)
+		}
+		return
+	}
+
+	// Ensure client is connected
+	if !client.IsConnected() {
+		if err := client.Connect(ctx); err != nil {
+			for _, idx := range indices {
+				results[idx].Success = false
+				results[idx].Error = fmt.Sprintf("failed to connect to node %s: %v", nodeID, err)
+			}
+			return
+		}
+	}
+
+	// Try BulkIndex if client supports it, otherwise fall back to individual calls
+	bulkClient, ok := client.(BulkIndexClient)
+	if ok {
+		resp, err := bulkClient.BulkIndex(ctx, indexName, shardID, items)
+		if err != nil {
+			for _, idx := range indices {
+				results[idx].Success = false
+				results[idx].Error = err.Error()
+			}
+			return
+		}
+
+		// Map responses back to original indices
+		for j, itemResp := range resp.Items {
+			if j < len(indices) {
+				idx := indices[j]
+				results[idx].Success = itemResp.Acknowledged
+				results[idx].DocID = itemResp.DocId
+				if itemResp.Error != "" {
+					results[idx].Error = itemResp.Error
+				}
+			}
+		}
+	} else {
+		// Fallback: individual IndexDocument calls
+		for j, item := range items {
+			idx := indices[j]
+			docMap := docs[idx].Document
+			// Lazy unmarshal: if Document is nil but raw JSON is available,
+			// parse on demand (handles case where bulk parser skipped the parse)
+			if docMap == nil && len(docs[idx].DocumentJSON) > 0 {
+				if err := json.Unmarshal(docs[idx].DocumentJSON, &docMap); err != nil {
+					results[idx].Success = false
+					results[idx].Error = fmt.Sprintf("failed to unmarshal document: %v", err)
+					continue
+				}
+			}
+			resp, err := client.IndexDocument(ctx, indexName, shardID, item.DocId, docMap)
+			if err != nil {
+				results[idx].Success = false
+				results[idx].Error = err.Error()
+			} else {
+				results[idx].Success = true
+				results[idx].Version = resp.Version
+			}
+		}
+	}
+}
+
 // RouteGetDocument routes a get document operation to the correct shard
 func (dr *DocumentRouter) RouteGetDocument(ctx context.Context, indexName, docID string) (*pb.GetDocumentResponse, error) {
-	// Get index metadata to determine number of shards
-	metadata, err := dr.masterClient.GetIndexMetadata(ctx, indexName)
+	// Get cached index metadata and shard routing
+	metadata, routing, err := dr.getIndexMetadataCached(ctx, indexName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get index metadata: %w", err)
+		return nil, err
 	}
 
 	numShards := metadata.Metadata.Settings.NumberOfShards
@@ -307,12 +376,6 @@ func (dr *DocumentRouter) RouteGetDocument(ctx context.Context, indexName, docID
 
 	// Calculate which shard this document belongs to
 	shardID := dr.calculateShardID(docID, numShards)
-
-	// Get shard routing information
-	routing, err := dr.masterClient.GetShardRouting(ctx, indexName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get shard routing: %w", err)
-	}
 
 	shard, exists := routing[shardID]
 	if !exists {
@@ -354,10 +417,10 @@ func (dr *DocumentRouter) RouteGetDocument(ctx context.Context, indexName, docID
 
 // RouteDeleteDocument routes a delete document operation to the correct shard
 func (dr *DocumentRouter) RouteDeleteDocument(ctx context.Context, indexName, docID string) (*pb.DeleteDocumentResponse, error) {
-	// Get index metadata to determine number of shards
-	metadata, err := dr.masterClient.GetIndexMetadata(ctx, indexName)
+	// Get cached index metadata and shard routing
+	metadata, routing, err := dr.getIndexMetadataCached(ctx, indexName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get index metadata: %w", err)
+		return nil, err
 	}
 
 	numShards := metadata.Metadata.Settings.NumberOfShards
@@ -367,12 +430,6 @@ func (dr *DocumentRouter) RouteDeleteDocument(ctx context.Context, indexName, do
 
 	// Calculate which shard this document belongs to
 	shardID := dr.calculateShardID(docID, numShards)
-
-	// Get shard routing information
-	routing, err := dr.masterClient.GetShardRouting(ctx, indexName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get shard routing: %w", err)
-	}
 
 	shard, exists := routing[shardID]
 	if !exists {
