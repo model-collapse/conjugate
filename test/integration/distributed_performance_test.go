@@ -33,9 +33,11 @@ func BenchmarkDistributedSearchLatency(b *testing.B) {
 
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
-			// Setup cluster
-			cfg := DefaultClusterConfig()
-			cfg.NumData = tc.numNodes
+			// Setup cluster using dynamic port allocation
+			cfg, err := DynamicClusterConfigWithSize(3, 1, tc.numNodes)
+			if err != nil {
+				b.Fatalf("Failed to allocate ports: %v", err)
+			}
 			cluster, err := NewTestCluster(b, cfg)
 			if err != nil {
 				b.Fatalf("Failed to create cluster: %v", err)
@@ -136,9 +138,11 @@ func BenchmarkDistributedSearchThroughput(b *testing.B) {
 
 	for _, concurrency := range concurrencyLevels {
 		b.Run(fmt.Sprintf("Concurrency_%d", concurrency), func(b *testing.B) {
-			// Setup cluster with 3 nodes
-			cfg := DefaultClusterConfig()
-			cfg.NumData = 3
+			// Setup cluster with 3 nodes using dynamic port allocation
+			cfg, err := DynamicClusterConfigWithSize(3, 1, 3)
+			if err != nil {
+				b.Fatalf("Failed to allocate ports: %v", err)
+			}
 			cluster, err := NewTestCluster(b, cfg)
 			if err != nil {
 				b.Fatalf("Failed to create cluster: %v", err)
@@ -244,9 +248,11 @@ func BenchmarkAggregationOverhead(b *testing.B) {
 		b.Skip("Skipping benchmark in short mode")
 	}
 
-	// Setup cluster
-	cfg := DefaultClusterConfig()
-	cfg.NumData = 3
+	// Setup cluster using dynamic port allocation
+	cfg, err := DynamicClusterConfigWithSize(3, 1, 3)
+	if err != nil {
+		b.Fatalf("Failed to allocate ports: %v", err)
+	}
 	cluster, err := NewTestCluster(b, cfg)
 	if err != nil {
 		b.Fatalf("Failed to create cluster: %v", err)
@@ -411,9 +417,11 @@ func TestScalability(t *testing.T) {
 
 	for _, cfg := range nodeConfigs {
 		t.Run(fmt.Sprintf("%d_nodes", cfg.numNodes), func(t *testing.T) {
-			// Setup cluster
-			clusterCfg := DefaultClusterConfig()
-			clusterCfg.NumData = cfg.numNodes
+			// Setup cluster with dynamic ports
+			clusterCfg, err := DynamicClusterConfigWithSize(3, 1, cfg.numNodes)
+			if err != nil {
+				t.Fatalf("Failed to allocate ports: %v", err)
+			}
 			cluster, err := NewTestCluster(t, clusterCfg)
 			if err != nil {
 				t.Fatalf("Failed to create cluster: %v", err)

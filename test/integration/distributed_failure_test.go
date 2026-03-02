@@ -14,9 +14,11 @@ func TestPartialShardFailure(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Start with 4 data nodes
-	cfg := DefaultClusterConfig()
-	cfg.NumData = 4
+	// Start with 4 data nodes using dynamic port allocation
+	cfg, err := DynamicClusterConfigWithSize(3, 1, 4)
+	if err != nil {
+		t.Fatalf("Failed to allocate ports: %v", err)
+	}
 	cluster, err := NewTestCluster(t, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
@@ -160,10 +162,11 @@ func TestMasterFailover(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Start cluster with 3 master nodes for Raft quorum
-	cfg := DefaultClusterConfig()
-	cfg.NumMasters = 3
-	cfg.NumData = 2
+	// Start cluster with 3 master nodes for Raft quorum using dynamic port allocation
+	cfg, err := DynamicClusterConfigWithSize(3, 1, 2)
+	if err != nil {
+		t.Fatalf("Failed to allocate ports: %v", err)
+	}
 	cluster, err := NewTestCluster(t, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
@@ -288,9 +291,11 @@ func TestCascadingFailure(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Start with 5 data nodes
-	cfg := DefaultClusterConfig()
-	cfg.NumData = 5
+	// Start with 5 data nodes using dynamic port allocation
+	cfg, err := DynamicClusterConfigWithSize(3, 1, 5)
+	if err != nil {
+		t.Fatalf("Failed to allocate ports: %v", err)
+	}
 	cluster, err := NewTestCluster(t, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)

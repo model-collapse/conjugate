@@ -11,8 +11,8 @@ func TestClusterFormation(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -53,8 +53,8 @@ func TestLeaderElection(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -99,8 +99,8 @@ func TestCreateIndex(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -160,8 +160,8 @@ func TestRegisterDataNode(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -223,8 +223,8 @@ func TestMultipleIndices(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -298,8 +298,8 @@ func TestDeleteIndex(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -362,8 +362,8 @@ func TestClusterStateConsistency(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -428,17 +428,10 @@ func TestSmallCluster(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Create a minimal cluster
-	cfg := &ClusterConfig{
-		NumMasters:      1,
-		NumCoordination: 1,
-		NumData:         1,
-		StartPorts: PortRange{
-			MasterRaftBase: 20300,
-			MasterGRPCBase: 20400,
-			CoordRESTBase:  20500,
-			DataGRPCBase:   20600,
-		},
+	// Create a minimal cluster with dynamic ports
+	cfg, err := DynamicClusterConfigWithSize(1, 1, 1)
+	if err != nil {
+		t.Fatalf("Failed to allocate ports: %v", err)
 	}
 
 	cluster, err := NewTestCluster(t, cfg)

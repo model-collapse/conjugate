@@ -168,18 +168,38 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 		return qe.mergeFiltersAggregation(aggs)
 	}
 
-	// Sum bucket counts across all shards
-	bucketCounts := make(map[string]int64)      // for string keys (terms, date_histogram)
-	numericBucketCounts := make(map[float64]int64) // for numeric keys (histogram)
+	// Sum bucket counts across all shards, collecting sub-aggs per bucket
+	type bucketData struct {
+		count   int64
+		subAggs map[string][]*pb.AggregationResult // sub-aggs grouped by name across shards
+	}
+	bucketMap := make(map[string]*bucketData)         // for string keys (terms, date_histogram)
+	numericBucketMap := make(map[float64]*bucketData)  // for numeric keys (histogram)
 
 	isNumeric := aggType == "histogram"
 
 	for _, agg := range aggs {
 		for _, bucket := range agg.Buckets {
 			if isNumeric {
-				numericBucketCounts[bucket.NumericKey] += bucket.DocCount
+				bd, ok := numericBucketMap[bucket.NumericKey]
+				if !ok {
+					bd = &bucketData{subAggs: make(map[string][]*pb.AggregationResult)}
+					numericBucketMap[bucket.NumericKey] = bd
+				}
+				bd.count += bucket.DocCount
+				for subName, subAgg := range bucket.SubAggregations {
+					bd.subAggs[subName] = append(bd.subAggs[subName], subAgg)
+				}
 			} else {
-				bucketCounts[bucket.Key] += bucket.DocCount
+				bd, ok := bucketMap[bucket.Key]
+				if !ok {
+					bd = &bucketData{subAggs: make(map[string][]*pb.AggregationResult)}
+					bucketMap[bucket.Key] = bd
+				}
+				bd.count += bucket.DocCount
+				for subName, subAgg := range bucket.SubAggregations {
+					bd.subAggs[subName] = append(bd.subAggs[subName], subAgg)
+				}
 			}
 		}
 	}
@@ -189,11 +209,15 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 
 	if isNumeric {
 		// Numeric buckets (histogram)
-		for key, count := range numericBucketCounts {
-			buckets = append(buckets, &AggregationBucket{
+		for key, bd := range numericBucketMap {
+			bucket := &AggregationBucket{
 				NumericKey: key,
-				DocCount:   count,
-			})
+				DocCount:   bd.count,
+			}
+			if len(bd.subAggs) > 0 {
+				bucket.SubAggs = qe.mergeSubAggregations(bd.subAggs)
+			}
+			buckets = append(buckets, bucket)
 		}
 		// Sort by numeric key
 		sort.Slice(buckets, func(i, j int) bool {
@@ -201,22 +225,68 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 		})
 	} else {
 		// String buckets (terms, date_histogram)
-		for key, count := range bucketCounts {
-			buckets = append(buckets, &AggregationBucket{
+		for key, bd := range bucketMap {
+			bucket := &AggregationBucket{
 				Key:      key,
-				DocCount: count,
+				DocCount: bd.count,
+			}
+			if len(bd.subAggs) > 0 {
+				bucket.SubAggs = qe.mergeSubAggregations(bd.subAggs)
+			}
+			buckets = append(buckets, bucket)
+		}
+		// Sort by doc_count descending for terms, by key for date_histogram
+		if aggType == "date_histogram" {
+			sort.Slice(buckets, func(i, j int) bool {
+				return buckets[i].Key < buckets[j].Key
+			})
+		} else {
+			sort.Slice(buckets, func(i, j int) bool {
+				return buckets[i].DocCount > buckets[j].DocCount
 			})
 		}
-		// Sort by doc_count descending
-		sort.Slice(buckets, func(i, j int) bool {
-			return buckets[i].DocCount > buckets[j].DocCount
-		})
 	}
 
 	return &AggregationResult{
 		Type:    aggType,
 		Buckets: buckets,
 	}
+}
+
+// mergeSubAggregations merges sub-aggregation results collected from multiple shard buckets.
+// Each sub-agg name maps to a slice of pb.AggregationResult from different shards.
+func (qe *QueryExecutor) mergeSubAggregations(subAggsByName map[string][]*pb.AggregationResult) map[string]*AggregationResult {
+	merged := make(map[string]*AggregationResult)
+	for name, subAggs := range subAggsByName {
+		if len(subAggs) == 0 {
+			continue
+		}
+		subType := subAggs[0].Type
+		var result *AggregationResult
+		switch subType {
+		case "terms", "histogram", "date_histogram":
+			result = qe.mergeBucketAggregation(subAggs)
+		case "stats":
+			result = qe.mergeStatsAggregation(subAggs, false)
+		case "extended_stats":
+			result = qe.mergeStatsAggregation(subAggs, true)
+		case "avg", "min", "max", "sum", "value_count":
+			result = qe.mergeSimpleMetricAggregation(subAggs)
+		case "cardinality":
+			result = qe.mergeCardinalityAggregation(subAggs)
+		case "percentiles":
+			result = qe.mergePercentilesAggregation(subAggs)
+		default:
+			// Unknown sub-agg type: convert first result directly
+			result = &AggregationResult{
+				Type: subType,
+			}
+		}
+		if result != nil {
+			merged[name] = result
+		}
+	}
+	return merged
 }
 
 // mergeRangeAggregation merges range aggregations preserving bucket order and metadata

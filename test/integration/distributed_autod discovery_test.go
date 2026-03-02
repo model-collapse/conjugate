@@ -14,9 +14,11 @@ func TestDataNodeAutoDiscovery(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Start with 2 data nodes initially
-	cfg := DefaultClusterConfig()
-	cfg.NumData = 2
+	// Start with 2 data nodes initially using dynamic port allocation
+	cfg, err := DynamicClusterConfigWithSize(3, 1, 2)
+	if err != nil {
+		t.Fatalf("Failed to allocate ports: %v", err)
+	}
 	cluster, err := NewTestCluster(t, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
@@ -186,9 +188,11 @@ func TestDataNodeDiscoveryTiming(t *testing.T) {
 	t.Log("3. Discovered nodes are immediately registered with QueryExecutor")
 	t.Log("4. No duplicate registrations occur")
 
-	// Start cluster
-	cfg := DefaultClusterConfig()
-	cfg.NumData = 2
+	// Start cluster using dynamic port allocation
+	cfg, err := DynamicClusterConfigWithSize(3, 1, 2)
+	if err != nil {
+		t.Fatalf("Failed to allocate ports: %v", err)
+	}
 	cluster, err := NewTestCluster(t, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)

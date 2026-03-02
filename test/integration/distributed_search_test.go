@@ -17,8 +17,11 @@ func TestDistributedSearchBasic(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cfg.NumData = 3 // Use 3 data nodes for distributed testing
+	// Using dynamic port allocation with 3 data nodes for distributed testing
+	cfg, err := DynamicClusterConfigWithSize(3, 1, 3)
+	if err != nil {
+		t.Fatalf("Failed to allocate ports: %v", err)
+	}
 	cluster, err := NewTestCluster(t, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
@@ -225,8 +228,11 @@ func TestDistributedSearchWithAggregations(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cfg.NumData = 3 // Use 3 data nodes
+	// Using dynamic port allocation with 3 data nodes
+	cfg, err := DynamicClusterConfigWithSize(3, 1, 3)
+	if err != nil {
+		t.Fatalf("Failed to allocate ports: %v", err)
+	}
 	cluster, err := NewTestCluster(t, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)

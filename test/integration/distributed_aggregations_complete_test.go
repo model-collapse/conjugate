@@ -14,9 +14,11 @@ func TestAllAggregationTypesDistributed(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Start cluster with 3 data nodes
-	cfg := DefaultClusterConfig()
-	cfg.NumData = 3
+	// Start cluster with 3 data nodes using dynamic port allocation
+	cfg, err := DynamicClusterConfigWithSize(3, 1, 3)
+	if err != nil {
+		t.Fatalf("Failed to allocate ports: %v", err)
+	}
 	cluster, err := NewTestCluster(t, cfg)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)

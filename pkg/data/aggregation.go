@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -539,4 +540,261 @@ func tryParseTimeData(s string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("unable to parse time: %s", s)
+}
+
+// computeAggregationsFromDocValues computes aggregations from lightweight AggDocValues.
+// This is faster than computeDataNodeAggregations because it avoids building
+// Hit objects and their Source maps - fields are already extracted as flat string values.
+func computeAggregationsFromDocValues(docs []diagon.AggDocValues, aggsMap map[string]interface{}) map[string]*pb.AggregationResult {
+	results := make(map[string]*pb.AggregationResult)
+
+	for name, aggDef := range aggsMap {
+		aggDefMap, ok := aggDef.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		var subAggsMap map[string]interface{}
+		if sub, ok := aggDefMap["aggs"]; ok {
+			subAggsMap, _ = sub.(map[string]interface{})
+		}
+
+		for aggType, aggBody := range aggDefMap {
+			if aggType == "aggs" {
+				continue
+			}
+			bodyMap, ok := aggBody.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			result := computeSingleAggFromDocValues(docs, aggType, bodyMap, subAggsMap)
+			if result != nil {
+				results[name] = result
+			}
+		}
+	}
+
+	return results
+}
+
+func computeSingleAggFromDocValues(docs []diagon.AggDocValues, aggType string, body map[string]interface{}, subAggsMap map[string]interface{}) *pb.AggregationResult {
+	field, _ := body["field"].(string)
+
+	switch aggType {
+	case "terms":
+		return computeTermsAggDocValues(docs, field, body, subAggsMap)
+	case "date_histogram":
+		return computeDateHistogramAggDocValues(docs, field, body, subAggsMap)
+	case "avg":
+		return computeNumericAggDocValues(docs, field, "avg")
+	case "sum":
+		return computeNumericAggDocValues(docs, field, "sum")
+	case "min":
+		return computeNumericAggDocValues(docs, field, "min")
+	case "max":
+		return computeNumericAggDocValues(docs, field, "max")
+	case "stats":
+		return computeNumericAggDocValues(docs, field, "stats")
+	case "value_count":
+		count := int64(0)
+		for _, doc := range docs {
+			if _, ok := doc.Fields[field]; ok {
+				count++
+			}
+		}
+		return &pb.AggregationResult{Type: "value_count", Count: count}
+	case "cardinality":
+		unique := make(map[string]struct{})
+		for _, doc := range docs {
+			if fv, ok := doc.Fields[field]; ok && fv.StringVal != "" {
+				unique[fv.StringVal] = struct{}{}
+			}
+		}
+		return &pb.AggregationResult{Type: "cardinality", Value: int64(len(unique))}
+	default:
+		return nil
+	}
+}
+
+func computeTermsAggDocValues(docs []diagon.AggDocValues, field string, body map[string]interface{}, subAggsMap map[string]interface{}) *pb.AggregationResult {
+	size := 10
+	if s, ok := body["size"].(float64); ok {
+		size = int(s)
+	}
+
+	counts := make(map[string]int64)
+	var bucketDocs map[string][]diagon.AggDocValues
+	if len(subAggsMap) > 0 {
+		bucketDocs = make(map[string][]diagon.AggDocValues)
+	}
+
+	for _, doc := range docs {
+		fv, ok := doc.Fields[field]
+		if !ok || fv.StringVal == "" {
+			continue
+		}
+		key := fv.StringVal
+		counts[key]++
+		if bucketDocs != nil {
+			bucketDocs[key] = append(bucketDocs[key], doc)
+		}
+	}
+
+	type kv struct {
+		key   string
+		count int64
+	}
+	sorted := make([]kv, 0, len(counts))
+	for k, v := range counts {
+		sorted = append(sorted, kv{k, v})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].count > sorted[j].count
+	})
+	if len(sorted) > size {
+		sorted = sorted[:size]
+	}
+
+	buckets := make([]*pb.AggregationBucket, len(sorted))
+	for i, kv := range sorted {
+		bucket := &pb.AggregationBucket{
+			Key:      kv.key,
+			DocCount: kv.count,
+		}
+		if bucketDocs != nil {
+			bucket.SubAggregations = computeAggregationsFromDocValues(bucketDocs[kv.key], subAggsMap)
+		}
+		buckets[i] = bucket
+	}
+
+	return &pb.AggregationResult{
+		Type:    "terms",
+		Buckets: buckets,
+	}
+}
+
+func computeDateHistogramAggDocValues(docs []diagon.AggDocValues, field string, body map[string]interface{}, subAggsMap map[string]interface{}) *pb.AggregationResult {
+	interval := "1h"
+	if v, ok := body["calendar_interval"].(string); ok {
+		interval = v
+	} else if v, ok := body["fixed_interval"].(string); ok {
+		interval = v
+	} else if v, ok := body["interval"].(string); ok {
+		interval = v
+	}
+
+	duration := parseIntervalData(interval)
+
+	type bucketData struct {
+		key   time.Time
+		count int64
+		docs  []diagon.AggDocValues
+	}
+	bucketMap := make(map[int64]*bucketData)
+
+	for _, doc := range docs {
+		fv, ok := doc.Fields[field]
+		if !ok || fv.StringVal == "" {
+			continue
+		}
+
+		ts, err := tryParseTimeData(fv.StringVal)
+		if err != nil {
+			continue
+		}
+
+		bucketTime := truncateToIntervalData(ts, duration)
+		bucketKey := bucketTime.UnixMilli()
+
+		if bd, ok := bucketMap[bucketKey]; ok {
+			bd.count++
+			if len(subAggsMap) > 0 {
+				bd.docs = append(bd.docs, doc)
+			}
+		} else {
+			bd := &bucketData{key: bucketTime, count: 1}
+			if len(subAggsMap) > 0 {
+				bd.docs = []diagon.AggDocValues{doc}
+			}
+			bucketMap[bucketKey] = bd
+		}
+	}
+
+	keys := make([]int64, 0, len(bucketMap))
+	for k := range bucketMap {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+
+	buckets := make([]*pb.AggregationBucket, len(keys))
+	for i, k := range keys {
+		bd := bucketMap[k]
+		bucket := &pb.AggregationBucket{
+			Key:        bd.key.Format(time.RFC3339),
+			NumericKey: float64(bd.key.UnixMilli()),
+			DocCount:   bd.count,
+		}
+		if len(subAggsMap) > 0 {
+			bucket.SubAggregations = computeAggregationsFromDocValues(bd.docs, subAggsMap)
+		}
+		buckets[i] = bucket
+	}
+
+	return &pb.AggregationResult{
+		Type:    "date_histogram",
+		Buckets: buckets,
+	}
+}
+
+// computeNumericAggDocValues computes numeric aggregations (avg, sum, min, max, stats)
+// from doc values where all values are stored as strings.
+func computeNumericAggDocValues(docs []diagon.AggDocValues, field string, aggType string) *pb.AggregationResult {
+	sum := 0.0
+	minVal := math.Inf(1)
+	maxVal := math.Inf(-1)
+	count := int64(0)
+
+	for _, doc := range docs {
+		fv, ok := doc.Fields[field]
+		if !ok || fv.StringVal == "" {
+			continue
+		}
+		f, err := strconv.ParseFloat(fv.StringVal, 64)
+		if err != nil {
+			continue
+		}
+		sum += f
+		if f < minVal {
+			minVal = f
+		}
+		if f > maxVal {
+			maxVal = f
+		}
+		count++
+	}
+
+	if count == 0 {
+		minVal = 0
+		maxVal = 0
+	}
+	avg := 0.0
+	if count > 0 {
+		avg = sum / float64(count)
+	}
+
+	switch aggType {
+	case "avg":
+		return &pb.AggregationResult{Type: "avg", Avg: avg, Count: count, Sum: sum}
+	case "sum":
+		return &pb.AggregationResult{Type: "sum", Sum: sum}
+	case "min":
+		return &pb.AggregationResult{Type: "min", Min: minVal}
+	case "max":
+		return &pb.AggregationResult{Type: "max", Max: maxVal}
+	case "stats":
+		return &pb.AggregationResult{Type: "stats", Count: count, Min: minVal, Max: maxVal, Avg: avg, Sum: sum}
+	default:
+		return nil
+	}
 }

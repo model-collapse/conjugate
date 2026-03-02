@@ -104,16 +104,43 @@ func NewRaftNode(cfg *Config, fsm *FSM) (*RaftNode, error) {
 
 	// Bootstrap cluster if needed
 	if cfg.Bootstrap {
-		configuration := raft.Configuration{
-			Servers: []raft.Server{
-				{
-					ID:      raft.ServerID(cfg.NodeID),
-					Address: transport.LocalAddr(),
-				},
-			},
+		// Build server configuration
+		servers := []raft.Server{}
+
+		// If we have peers, bootstrap with all of them
+		if len(cfg.Peers) > 0 {
+			for i, peerAddr := range cfg.Peers {
+				// Derive server ID from peer index
+				// This assumes peers are ordered and correspond to master-0, master-1, master-2, etc.
+				serverID := fmt.Sprintf("master-%d", i)
+				servers = append(servers, raft.Server{
+					ID:      raft.ServerID(serverID),
+					Address: raft.ServerAddress(peerAddr),
+				})
+			}
+			cfg.Logger.Info("Bootstrapping Raft cluster with peers",
+				zap.Int("num_servers", len(servers)),
+				zap.Strings("peers", cfg.Peers))
+		} else {
+			// Single-node bootstrap
+			servers = append(servers, raft.Server{
+				ID:      raft.ServerID(cfg.NodeID),
+				Address: transport.LocalAddr(),
+			})
+			cfg.Logger.Info("Bootstrapping single-node Raft cluster",
+				zap.String("node_id", cfg.NodeID))
 		}
-		ra.BootstrapCluster(configuration)
-		cfg.Logger.Info("Bootstrapped Raft cluster", zap.String("node_id", cfg.NodeID))
+
+		configuration := raft.Configuration{
+			Servers: servers,
+		}
+		future := ra.BootstrapCluster(configuration)
+		if err := future.Error(); err != nil {
+			cfg.Logger.Warn("Bootstrap cluster returned error (may be expected if already bootstrapped)",
+				zap.Error(err))
+		} else {
+			cfg.Logger.Info("Successfully bootstrapped Raft cluster")
+		}
 	}
 
 	return node, nil

@@ -35,11 +35,17 @@ func NewMasterNode(cfg *config.MasterConfig, logger *zap.Logger) (*MasterNode, e
 	fsm := raft.NewFSM(logger)
 
 	// Create Raft node
+	thisAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.RaftPort)
+
+	// Determine if this node should bootstrap the cluster
+	// Bootstrap if: no peers configured, OR this is the first node in the peer list
+	shouldBootstrap := len(cfg.Peers) == 0 || (len(cfg.Peers) > 0 && cfg.Peers[0] == thisAddr)
+
 	raftCfg := &raft.Config{
 		NodeID:    cfg.NodeID,
-		RaftAddr:  fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.RaftPort),
+		RaftAddr:  thisAddr,
 		DataDir:   cfg.DataDir,
-		Bootstrap: len(cfg.Peers) == 0, // Bootstrap if no peers
+		Bootstrap: shouldBootstrap,
 		Peers:     cfg.Peers,
 		Logger:    logger,
 	}

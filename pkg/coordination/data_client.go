@@ -55,6 +55,10 @@ func (dc *DataNodeClient) Connect(ctx context.Context) error {
 		dc.address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(64*1024*1024), // 64MB for large bulk responses
+			grpc.MaxCallSendMsgSize(64*1024*1024), // 64MB for large bulk requests
+		),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to connect to data node %s: %w", dc.nodeID, err)
@@ -97,7 +101,7 @@ func (dc *DataNodeClient) IsConnected() bool {
 }
 
 // Search executes a search query on a specific shard
-func (dc *DataNodeClient) Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte) (*pb.SearchResponse, error) {
+func (dc *DataNodeClient) Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte, maxResults int) (*pb.SearchResponse, error) {
 	dc.mu.RLock()
 	if !dc.connected {
 		dc.mu.RUnlock()
@@ -106,11 +110,14 @@ func (dc *DataNodeClient) Search(ctx context.Context, indexName string, shardID 
 	client := dc.client
 	dc.mu.RUnlock()
 
+	// Pass maxResults as-is; the data node handles defaults.
+	// For aggregation queries, maxResults=0 tells the data node to decide.
 	req := &pb.SearchRequest{
 		IndexName:        indexName,
 		ShardId:          shardID,
 		Query:            query,
 		FilterExpression: filterExpression,
+		Size:             int32(maxResults),
 	}
 
 	resp, err := client.Search(ctx, req)

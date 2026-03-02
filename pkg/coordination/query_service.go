@@ -192,10 +192,9 @@ type ShardInfo struct {
 func (qs *QueryService) ExecuteSearch(ctx context.Context, indexName string, requestBody []byte) (*SearchResult, error) {
 	startTime := time.Now()
 
-	qs.logger.Info("==> QueryService.ExecuteSearch ENTRY",
+	qs.logger.Debug("QueryService.ExecuteSearch",
 		zap.String("index", indexName),
-		zap.Int("body_len", len(requestBody)),
-		zap.String("body", string(requestBody)))
+		zap.Int("body_len", len(requestBody)))
 
 	// Step 1: Parse query
 	parseStart := time.Now()
@@ -224,9 +223,8 @@ func (qs *QueryService) ExecuteSearch(ctx context.Context, indexName string, req
 		}
 	}
 
-	qs.logger.Info("Query parsed successfully",
-		zap.String("index", indexName),
-		zap.Int("size", searchReq.Size))
+	qs.logger.Debug("Query parsed",
+		zap.String("index", indexName))
 
 	queryPlanningTime.WithLabelValues(indexName, "parse").Observe(time.Since(parseStart).Seconds())
 

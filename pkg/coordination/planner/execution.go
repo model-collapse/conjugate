@@ -82,11 +82,16 @@ func convertExecutorAggregation(agg *executor.AggregationResult) *AggregationRes
 		if key == "" {
 			key = fmt.Sprintf("%v", bucket.NumericKey)
 		}
-		result.Buckets[i] = &Bucket{
+		b := &Bucket{
 			Key:      key,
 			DocCount: bucket.DocCount,
 			SubAggs:  make(map[string]*AggregationResult),
 		}
+		// Convert sub-aggregations recursively
+		for subName, subAgg := range bucket.SubAggs {
+			b.SubAggs[subName] = convertExecutorAggregation(subAgg)
+		}
+		result.Buckets[i] = b
 	}
 
 	// For stats aggregations
@@ -191,14 +196,17 @@ func expressionToMap(expr *Expression) map[string]interface{} {
 			}
 		}
 
-		// Handle bool with multiple children (could be AND or OR)
-		// For now, treat as should (OR)
 		if len(expr.Children) > 0 {
-			should := make([]interface{}, len(expr.Children))
+			clauses := make([]interface{}, len(expr.Children))
 			for i, child := range expr.Children {
-				should[i] = expressionToMap(child)
+				clauses[i] = expressionToMap(child)
 			}
-			boolQuery["should"] = should
+			// Use "should" (OR) only when explicitly marked, default to "must" (AND)
+			if expr.Value == "should" {
+				boolQuery["should"] = clauses
+			} else {
+				boolQuery["must"] = clauses
+			}
 		}
 
 		return map[string]interface{}{

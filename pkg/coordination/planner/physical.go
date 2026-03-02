@@ -101,10 +101,9 @@ func (s *PhysicalScan) Execute(ctx context.Context) (*ExecutionResult, error) {
 	}
 
 	if execCtx.Logger != nil {
-		execCtx.Logger.Info("==> PhysicalScan.Execute ENTRY",
+		execCtx.Logger.Debug("PhysicalScan.Execute",
 			zap.String("index", s.IndexName),
-			zap.Int("num_shards", len(s.Shards)),
-			zap.Bool("has_filter", s.Filter != nil))
+			zap.Int("num_shards", len(s.Shards)))
 	}
 
 	// Convert filter expression to JSON query
@@ -136,9 +135,8 @@ func (s *PhysicalScan) Execute(ctx context.Context) (*ExecutionResult, error) {
 	}
 
 	if execCtx.Logger != nil {
-		execCtx.Logger.Info("Calling QueryExecutor.ExecuteSearch",
+		execCtx.Logger.Debug("Calling QueryExecutor.ExecuteSearch",
 			zap.String("index", s.IndexName),
-			zap.String("query", string(queryBytes)),
 			zap.Bool("has_aggs", len(s.Aggregations) > 0))
 	}
 
@@ -166,7 +164,7 @@ func (s *PhysicalScan) Execute(ctx context.Context) (*ExecutionResult, error) {
 	}
 
 	if execCtx.Logger != nil {
-		execCtx.Logger.Info("QueryExecutor.ExecuteSearch SUCCESS",
+		execCtx.Logger.Debug("QueryExecutor.ExecuteSearch done",
 			zap.Int64("total_hits", executorResult.TotalHits),
 			zap.Int("hits_returned", len(executorResult.Hits)))
 	}

@@ -61,11 +61,17 @@ type MetricsCollector struct {
 	RaftAppliedIndex    prometheus.Gauge
 }
 
-// NewMetricsCollector creates a new metrics collector for a component
+// NewMetricsCollector creates a new metrics collector for a component using the default registry
 func NewMetricsCollector(component string) *MetricsCollector {
+	return NewMetricsCollectorWithRegistry(component, prometheus.DefaultRegisterer)
+}
+
+// NewMetricsCollectorWithRegistry creates a new metrics collector with a custom registry
+func NewMetricsCollectorWithRegistry(component string, registerer prometheus.Registerer) *MetricsCollector {
+	factory := promauto.With(registerer)
 	return &MetricsCollector{
 		// HTTP metrics
-		HTTPRequestsTotal: promauto.NewCounterVec(
+		HTTPRequestsTotal: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -74,7 +80,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"method", "path", "status"},
 		),
-		HTTPRequestDuration: promauto.NewHistogramVec(
+		HTTPRequestDuration: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -84,7 +90,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"method", "path"},
 		),
-		HTTPRequestSize: promauto.NewHistogramVec(
+		HTTPRequestSize: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -94,7 +100,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"method", "path"},
 		),
-		HTTPResponseSize: promauto.NewHistogramVec(
+		HTTPResponseSize: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -106,7 +112,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 		),
 
 		// Query metrics
-		QueryTotal: promauto.NewCounterVec(
+		QueryTotal: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -115,7 +121,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"index", "query_type", "status"},
 		),
-		QueryDuration: promauto.NewHistogramVec(
+		QueryDuration: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -125,7 +131,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"index", "query_type"},
 		),
-		QueryComplexity: promauto.NewHistogramVec(
+		QueryComplexity: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -135,7 +141,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"index"},
 		),
-		QueryCacheHits: promauto.NewCounter(
+		QueryCacheHits: factory.NewCounter(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -143,7 +149,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 				Help:      "Total number of query cache hits",
 			},
 		),
-		QueryCacheMisses: promauto.NewCounter(
+		QueryCacheMisses: factory.NewCounter(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -151,7 +157,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 				Help:      "Total number of query cache misses",
 			},
 		),
-		QueryShardCount: promauto.NewHistogramVec(
+		QueryShardCount: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -163,7 +169,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 		),
 
 		// Bulk operation metrics
-		BulkOperationsTotal: promauto.NewCounterVec(
+		BulkOperationsTotal: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -172,7 +178,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"operation", "status"},
 		),
-		BulkOperationsDuration: promauto.NewHistogram(
+		BulkOperationsDuration: factory.NewHistogram(
 			prometheus.HistogramOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -181,7 +187,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 				Buckets:   []float64{.01, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60},
 			},
 		),
-		BulkOperationsPerRequest: promauto.NewHistogramVec(
+		BulkOperationsPerRequest: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -193,7 +199,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 		),
 
 		// Document operation metrics
-		DocumentsIndexed: promauto.NewCounterVec(
+		DocumentsIndexed: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -202,7 +208,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"index", "status"},
 		),
-		DocumentsDeleted: promauto.NewCounterVec(
+		DocumentsDeleted: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -211,7 +217,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"index", "status"},
 		),
-		DocumentsRetrieved: promauto.NewCounterVec(
+		DocumentsRetrieved: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -222,7 +228,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 		),
 
 		// Cluster metrics
-		ClusterNodes: promauto.NewGaugeVec(
+		ClusterNodes: factory.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -231,7 +237,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"node_type", "status"},
 		),
-		ClusterShards: promauto.NewGaugeVec(
+		ClusterShards: factory.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -240,7 +246,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"index", "state"},
 		),
-		ClusterDocuments: promauto.NewGauge(
+		ClusterDocuments: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -248,7 +254,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 				Help:      "Total number of documents in the cluster",
 			},
 		),
-		ClusterIndices: promauto.NewGauge(
+		ClusterIndices: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -258,7 +264,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 		),
 
 		// Shard metrics
-		ShardOperations: promauto.NewCounterVec(
+		ShardOperations: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -267,7 +273,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"operation", "status"},
 		),
-		ShardSize: promauto.NewGaugeVec(
+		ShardSize: factory.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -276,7 +282,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"index", "shard_id"},
 		),
-		ShardDocuments: promauto.NewGaugeVec(
+		ShardDocuments: factory.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -287,7 +293,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 		),
 
 		// gRPC metrics
-		GRPCRequestsTotal: promauto.NewCounterVec(
+		GRPCRequestsTotal: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -296,7 +302,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 			},
 			[]string{"method", "status"},
 		),
-		GRPCRequestDuration: promauto.NewHistogramVec(
+		GRPCRequestDuration: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -308,7 +314,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 		),
 
 		// Raft metrics
-		RaftLeader: promauto.NewGauge(
+		RaftLeader: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -316,7 +322,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 				Help:      "Whether this node is the Raft leader (1=leader, 0=follower)",
 			},
 		),
-		RaftTerm: promauto.NewGauge(
+		RaftTerm: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -324,7 +330,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 				Help:      "Current Raft term",
 			},
 		),
-		RaftCommitIndex: promauto.NewGauge(
+		RaftCommitIndex: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,
@@ -332,7 +338,7 @@ func NewMetricsCollector(component string) *MetricsCollector {
 				Help:      "Current Raft commit index",
 			},
 		),
-		RaftAppliedIndex: promauto.NewGauge(
+		RaftAppliedIndex: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: Namespace,
 				Subsystem: component,

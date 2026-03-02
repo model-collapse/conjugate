@@ -149,10 +149,11 @@ const (
 
 // Aggregation represents an aggregation operation
 type Aggregation struct {
-	Name   string
-	Type   AggregationType
-	Field  string
-	Params map[string]interface{} // Additional parameters (e.g., size for terms, interval for histogram)
+	Name    string
+	Type    AggregationType
+	Field   string
+	Params  map[string]interface{} // Additional parameters (e.g., size for terms, interval for histogram)
+	SubAggs []*Aggregation         // Sub-aggregations (e.g., avg within terms buckets)
 }
 
 // LogicalAggregate represents an aggregation operation
@@ -179,7 +180,14 @@ func (a *LogicalAggregate) Cardinality() int64 {
 	return a.Child.Cardinality() / 10
 }
 func (a *LogicalAggregate) String() string {
-	return fmt.Sprintf("Aggregate(groupBy=%v, aggs=%d)", a.GroupBy, len(a.Aggregations))
+	aggDescs := make([]string, len(a.Aggregations))
+	for i, agg := range a.Aggregations {
+		aggDescs[i] = fmt.Sprintf("%s:%s(%s)", agg.Name, agg.Type, agg.Field)
+		for _, sub := range agg.SubAggs {
+			aggDescs[i] += fmt.Sprintf("+%s:%s(%s)", sub.Name, sub.Type, sub.Field)
+		}
+	}
+	return fmt.Sprintf("Aggregate(groupBy=%v, aggs=[%s])", a.GroupBy, fmt.Sprintf("%v", aggDescs))
 }
 
 // LogicalSort represents a sort operation

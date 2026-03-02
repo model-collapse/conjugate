@@ -10,12 +10,14 @@ import (
 // Converter converts parser AST to logical plans
 type Converter struct {
 	defaultCardinality int64 // Default cardinality for scans when unknown
+	dateMathParser     *DateMathParser // Parser for date math expressions
 }
 
 // NewConverter creates a new AST to logical plan converter
 func NewConverter() *Converter {
 	return &Converter{
 		defaultCardinality: 100000, // Default: 100K documents
+		dateMathParser:     NewDateMathParser(),
 	}
 }
 
@@ -122,11 +124,12 @@ func (c *Converter) ConvertQuery(q parser.Query) (*Expression, error) {
 		}
 		return &Expression{
 			Type:     ExprTypeBool,
+			Value:    "should",
 			Children: children,
 		}, nil
 
 	case *parser.RangeQuery:
-		// Only include non-nil range parameters
+		// Build range parameters and parse date math expressions
 		rangeParams := make(map[string]interface{})
 		if query.Gt != nil {
 			rangeParams["gt"] = query.Gt
@@ -140,6 +143,11 @@ func (c *Converter) ConvertQuery(q parser.Query) (*Expression, error) {
 		if query.Lte != nil {
 			rangeParams["lte"] = query.Lte
 		}
+
+		// Parse date math expressions (e.g., "now-7d" -> "2024-06-08T12:00:00.000Z")
+		// This is done at coordination layer to avoid repeated parsing on each data node
+		rangeParams = c.dateMathParser.ParseRangeParams(rangeParams)
+
 		return &Expression{
 			Type:  ExprTypeRange,
 			Field: query.Field,
@@ -195,6 +203,7 @@ func (c *Converter) ConvertQuery(q parser.Query) (*Expression, error) {
 		}
 		return &Expression{
 			Type:     ExprTypeBool,
+			Value:    "should",
 			Children: children,
 		}, nil
 
@@ -207,18 +216,30 @@ func (c *Converter) ConvertQuery(q parser.Query) (*Expression, error) {
 		}, nil
 
 	case *parser.QueryStringQuery:
-		// Query string is complex - for now treat as match on default field
+		// Parse field:terms syntax from query string (e.g., "message: monkey jackal bear")
 		field := query.DefaultField
+		queryText := query.Query
 		if field == "" && len(query.Fields) > 0 {
 			field = query.Fields[0]
 		}
+		// Extract "field: terms" pattern from query string
 		if field == "" {
-			field = "_all"
+			if idx := strings.Index(queryText, ":"); idx > 0 {
+				candidate := strings.TrimSpace(queryText[:idx])
+				// Only treat as field if it's a simple identifier (no spaces)
+				if !strings.Contains(candidate, " ") {
+					field = candidate
+					queryText = strings.TrimSpace(queryText[idx+1:])
+				}
+			}
+		}
+		if field == "" {
+			field = "message" // Default to message field for text search
 		}
 		return &Expression{
 			Type:  ExprTypeMatch,
 			Field: field,
-			Value: query.Query,
+			Value: queryText,
 		}, nil
 
 	default:
@@ -261,6 +282,7 @@ func (c *Converter) convertBoolQuery(q *parser.BoolQuery) (*Expression, error) {
 		}
 		shouldExpr := &Expression{
 			Type:     ExprTypeBool,
+			Value:    "should",
 			Children: shouldChildren,
 		}
 		allClauses = append(allClauses, shouldExpr)
@@ -303,11 +325,38 @@ func (c *Converter) convertAggregations(aggs map[string]interface{}, child Logic
 			continue
 		}
 
+		// Extract sub-aggregations if present
+		var subAggs []*Aggregation
+		if subAggsDef, ok := aggMap["aggs"]; ok {
+			if subAggsMap, ok := subAggsDef.(map[string]interface{}); ok {
+				for subName, subDef := range subAggsMap {
+					subDefMap, ok := subDef.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					for subType, subBody := range subDefMap {
+						if subType == "aggs" {
+							continue // Skip nested aggs within sub-aggs for now
+						}
+						subAgg, err := c.convertAggregation(subName, subType, subBody)
+						if err != nil {
+							return nil, err
+						}
+						subAggs = append(subAggs, subAgg)
+					}
+				}
+			}
+		}
+
 		for aggType, aggBody := range aggMap {
+			if aggType == "aggs" {
+				continue // Already handled above
+			}
 			agg, err := c.convertAggregation(name, aggType, aggBody)
 			if err != nil {
 				return nil, err
 			}
+			agg.SubAggs = subAggs
 			aggregations = append(aggregations, agg)
 		}
 	}

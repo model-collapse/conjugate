@@ -145,8 +145,9 @@ func TestBulkIndexBreakdown(t *testing.T) {
 
 		for b := 0; b < numBatches; b++ {
 			batch := make([]struct {
-				ID  string
-				Doc map[string]interface{}
+				ID         string
+				Doc        map[string]interface{}
+				SourceJSON []byte
 			}, batchSize)
 			for i := 0; i < batchSize; i++ {
 				batch[i].ID = fmt.Sprintf("doc-%d-%d", b, i)
@@ -190,8 +191,9 @@ func TestBulkIndexBreakdown(t *testing.T) {
 		start := time.Now()
 		for b := 0; b < numBatches; b++ {
 			batch := make([]struct {
-				ID  string
-				Doc map[string]interface{}
+				ID         string
+				Doc        map[string]interface{}
+				SourceJSON []byte
 			}, batchSize)
 			for i := 0; i < batchSize; i++ {
 				batch[i].ID = fmt.Sprintf("nc-%d-%d", b, i)

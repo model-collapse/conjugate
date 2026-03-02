@@ -18,8 +18,8 @@ type MockDataNodeClient struct {
 	nodeID string
 }
 
-func (m *MockDataNodeClient) Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte) (*pb.SearchResponse, error) {
-	args := m.Called(ctx, indexName, shardID, query, filterExpression)
+func (m *MockDataNodeClient) Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte, maxResults int) (*pb.SearchResponse, error) {
+	args := m.Called(ctx, indexName, shardID, query, filterExpression, maxResults)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -109,7 +109,7 @@ func TestQueryExecutorSearchTwoShards(t *testing.T) {
 	// Setup mock data node clients
 	node1 := &MockDataNodeClient{nodeID: "node1"}
 	node1.On("IsConnected").Return(true)
-	node1.On("Search", ctx, "test-index", int32(0), mock.Anything, mock.Anything).Return(
+	node1.On("Search", ctx, "test-index", int32(0), mock.Anything, mock.Anything, mock.Anything).Return(
 		&pb.SearchResponse{
 			TookMillis: 10,
 			Hits: &pb.SearchHits{
@@ -126,7 +126,7 @@ func TestQueryExecutorSearchTwoShards(t *testing.T) {
 
 	node2 := &MockDataNodeClient{nodeID: "node2"}
 	node2.On("IsConnected").Return(true)
-	node2.On("Search", ctx, "test-index", int32(1), mock.Anything, mock.Anything).Return(
+	node2.On("Search", ctx, "test-index", int32(1), mock.Anything, mock.Anything, mock.Anything).Return(
 		&pb.SearchResponse{
 			TookMillis: 12,
 			Hits: &pb.SearchHits{
@@ -198,7 +198,7 @@ func TestQueryExecutorSearchWithPagination(t *testing.T) {
 	}
 
 	node1.On("IsConnected").Return(true)
-	node1.On("Search", ctx, "test-index", int32(0), mock.Anything, mock.Anything).Return(
+	node1.On("Search", ctx, "test-index", int32(0), mock.Anything, mock.Anything, mock.Anything).Return(
 		&pb.SearchResponse{
 			TookMillis: 5,
 			Hits: &pb.SearchHits{
@@ -251,7 +251,7 @@ func TestQueryExecutorPartialShardFailure(t *testing.T) {
 	// Setup mock data nodes
 	node1 := &MockDataNodeClient{nodeID: "node1"}
 	node1.On("IsConnected").Return(true)
-	node1.On("Search", ctx, "test-index", int32(0), mock.Anything, mock.Anything).Return(
+	node1.On("Search", ctx, "test-index", int32(0), mock.Anything, mock.Anything, mock.Anything).Return(
 		&pb.SearchResponse{
 			Hits: &pb.SearchHits{
 				Total: &pb.TotalHits{Value: 30, Relation: "eq"},
@@ -264,14 +264,14 @@ func TestQueryExecutorPartialShardFailure(t *testing.T) {
 	node2 := &MockDataNodeClient{nodeID: "node2"}
 	node2.On("IsConnected").Return(true)
 	// Node2 fails
-	node2.On("Search", ctx, "test-index", int32(1), mock.Anything, mock.Anything).Return(
+	node2.On("Search", ctx, "test-index", int32(1), mock.Anything, mock.Anything, mock.Anything).Return(
 		(*pb.SearchResponse)(nil),
 		errors.New("connection timeout"),
 	)
 
 	node3 := &MockDataNodeClient{nodeID: "node3"}
 	node3.On("IsConnected").Return(true)
-	node3.On("Search", ctx, "test-index", int32(2), mock.Anything, mock.Anything).Return(
+	node3.On("Search", ctx, "test-index", int32(2), mock.Anything, mock.Anything, mock.Anything).Return(
 		&pb.SearchResponse{
 			Hits: &pb.SearchHits{
 				Total: &pb.TotalHits{Value: 35, Relation: "eq"},

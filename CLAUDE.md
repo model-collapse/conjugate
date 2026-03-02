@@ -9,6 +9,41 @@ CONJUGATE is a cloud-native distributed search engine providing 100% OpenSearch 
 **Primary Language**: Go (with CGO bindings to C++ Diagon core)
 **Architecture**: Distributed system with specialized node types (Master, Coordination, Data)
 
+## Critical Tenets
+
+### ⚠️ DIAGON IS A GIT SUBMODULE - DO NOT TREAT AS REGULAR CODE
+
+**Location**: `src/3rdparty/diagon/` (git submodule)
+**Upstream**: https://github.com/model-collapse/diagon
+
+**CRITICAL RULES:**
+1. **NEVER assume local Diagon code is latest** - Always check upstream repository
+2. **ALWAYS update submodule before diagnosing Diagon issues**:
+   ```bash
+   cd src/3rdparty/diagon
+   git fetch origin
+   git checkout main
+   git pull origin main
+   ```
+3. **NEVER commit Diagon changes directly** - Contribute to upstream first
+4. **ALWAYS rebuild after updating submodule**: `make diagon`
+5. **Check submodule status** with: `git submodule status`
+
+**Why this matters**: In Feb 2026, we wasted 2+ hours debugging "Diagon build failures" that were already fixed upstream. The local code was an old snapshot, not the actual latest from the Diagon repository. This tenet prevents that mistake.
+
+**To verify you have latest Diagon**:
+```bash
+cd src/3rdparty/diagon
+git log -1 --oneline  # Should show latest commit from https://github.com/model-collapse/diagon
+```
+
+### Thinking Tenets
+- **Be Self-discipline** Each efficiency observation should be based a correctly build artifact, following the build SOP. There is no trade-off in experiment/test, there is no 'guessed/predicted' finding based on incorrectly build artifact/ artifact with obvious bugs / approxiate without testing. Except being permitted, all the benchmarks should be conducted after a full build and all test passed.
+- **Be Humble and Straight** The positioning of this product is already clearly defined and known by the user. It is forbbiden to 'bury' the lags/drawbacks/inalignment/concerns in a long passage of boast. In each report, just mention the real benchmark data, straight and objective comparison, insights for improvement. No others. 
+- **Be Honest** DO NOT emphasize the advantage signal based on prediction data. All the reported comparison should be annotated with "predicted" and "experimented". Don't try to disguise the unreliable data (even fake data) with confident narrative.
+- **Be Rational** Each step you take (decide) to optmize / fix should be 100% rational based on the former obsevation, deep dive before every proposal. It is discouraged to enumerate massive clueless possibilties and let me choose. Experiment, verify and narrow down the root cause scope as much as possible.  
+- **Insist Highest Standard** The design target to succeed lucene and click-house from all the apects. There is no "Although we lag behind XXX, but we can save sth. by our design". There is NO EXCUSE falling behind them. Each time the benchmark show we are slower, you should be ashamed. Keep efficiency first in mind.
+
 ## Build Commands
 
 ### Building Binaries
@@ -28,14 +63,35 @@ BUILD_MODE=release make all
 
 ### Building C++ Diagon Integration
 
-```bash
-# Build Diagon C++ engine and C API wrapper
-make diagon
+The Diagon C++ search engine is managed as a git submodule with automated CMake integration.
 
-# This will:
-# 1. Build Diagon C++ core in pkg/data/diagon/upstream/build
-# 2. Build C API wrapper via build_c_api.sh
-# 3. Generate libdiagon.so shared library
+```bash
+# Build Diagon (automatically checks/initializes submodule and builds)
+make diagon
+# Output: pkg/data/diagon/build/libdiagon.so (1.4MB)
+
+# Update Diagon to latest upstream version and rebuild
+make diagon-update
+# This will fetch latest from https://github.com/model-collapse/diagon
+
+# Force rebuild from scratch (cleans build directory)
+make diagon-rebuild
+
+# Check Diagon submodule status and library state
+make diagon-status
+```
+
+**Build Process**:
+1. Diagon C++ library located at `src/3rdparty/diagon/` (in main repository)
+2. Built with CMake Release flags: `-O3 -march=native`, LTO enabled
+3. Compiles 70+ C++ files (SIMD-optimized BM25, Lucene104 codec, analyzers)
+4. Produces `src/3rdparty/diagon/build/libdiagon.so`
+5. Data node CGO links directly via relative paths (no symlinks needed)
+
+**Data Node Build**:
+```bash
+# Build data node (automatically checks for libdiagon.so, builds if missing)
+make data
 ```
 
 ### Testing
@@ -143,25 +199,31 @@ Response to Client
 
 The codebase integrates with Diagon C++ search engine via CGO:
 
-**Layer Structure** (pkg/data/diagon/):
-1. **Diagon C++ Core** (upstream/ - git submodule)
+**Layer Structure**:
+1. **Diagon C++ Core** (src/3rdparty/diagon/)
    - Pure C++ search engine implementation
    - Inverted index, columnar storage, SIMD acceleration
+   - Located in CONJUGATE main repository
 
-2. **C API Layer** (upstream/src/core/include/diagon/*.h)
-   - Opaque handle-based C API for language bindings
+2. **C API Layer** (src/3rdparty/diagon/src/core/include/diagon/c_api/)
+   - diagon_c_api.h: Main C API (index, search, queries)
+   - analysis_c.h: Text analysis API (optional)
+   - Opaque handle-based design for language bindings
    - Exception-safe wrappers
 
-3. **C++ Bridge** (c_api_src/)
-   - Minimal bridge code for type conversion
-   - Keep this layer thin
+3. **Go Bindings** (pkg/data/diagon/*.go)
+   - bridge.go: Main CGO bridge (index, search, query conversion)
+   - analysis_go.go: Pure Go text analyzers (default, no C++ dependency)
+   - analysis_cgo.go: CGO text analyzers (optional, requires `cgo_analysis` tag)
+   - Memory management with `defer C.free()` and `defer C.diagon_free_*()`
 
-4. **Go Bindings** (*.go files)
-   - CGO wrappers calling C API
-   - analysis.go, bridge.go
-   - Memory management with defer cleanup
+**CGO Configuration**:
+```go
+#cgo CFLAGS: -I${SRCDIR}/../../../src/3rdparty/diagon/src/core/include
+#cgo LDFLAGS: -L${SRCDIR}/build -ldiagon ... -Wl,-rpath,${SRCDIR}/build
+```
 
-**Important**: Never add Go code to Diagon upstream. Never add complex logic to c_api_src/. Prefer extending Diagon C API over adding bridge code.
+**Important**: Never add Go code to src/3rdparty/diagon. Prefer extending Diagon C API over adding bridge code. Keep CGO calls batched where possible.
 
 ### PPL (Piped Processing Language) Implementation
 
@@ -358,12 +420,53 @@ CONJUGATE supports two control plane architectures:
 
 ### Working with Diagon C++ Code
 
-1. Diagon code lives in `pkg/data/diagon/upstream/` (git submodule)
-2. Build Diagon: `cd pkg/data/diagon/upstream/build && cmake .. && make`
-3. Build C API wrapper: `cd pkg/data/diagon && ./build_c_api.sh`
-4. Test Go bindings: `cd pkg/data/diagon && go test -v`
-5. **Never modify upstream/ directly** - contribute to Diagon repo
-6. Update submodule: `git submodule update --remote`
+**Directory Structure**:
+```
+src/3rdparty/diagon/               # Diagon C++ library (in CONJUGATE main repo)
+├── src/core/
+│   ├── include/diagon/c_api/      # C API headers
+│   │   ├── diagon_c_api.h         # Main C API
+│   │   └── analysis_c.h           # Text analysis API
+│   └── src/                       # C++ implementation
+└── build/
+    └── libdiagon.so               # Compiled library
+
+pkg/data/diagon/                   # Go CGO bindings
+├── bridge.go                      # Main query execution bridge (CGO directives)
+├── analysis_go.go                 # Pure Go analyzers (default)
+├── analysis_cgo.go                # CGO analyzers (optional, needs cgo_analysis tag)
+└── build/libdiagon.so             # Local build cache (links to ../../../src/3rdparty/diagon/build)
+```
+
+**CGO Path Resolution**:
+- CGO directives in `bridge.go` use `${SRCDIR}` which expands to `pkg/data/diagon`
+- Relative path `../../../src/3rdparty/diagon` navigates to the Diagon C++ library
+- No symlinks needed - direct path references in CGO configuration
+
+**Development Workflow**:
+1. **Build Diagon library**:
+   ```bash
+   cd src/3rdparty/diagon
+   mkdir -p build && cd build
+   cmake .. -DCMAKE_BUILD_TYPE=Release
+   make -j$(nproc)
+   ```
+
+2. **Build data node** (automatically uses Diagon library):
+   ```bash
+   make data
+   ```
+
+3. **Test Go bindings**:
+   ```bash
+   cd pkg/data/diagon && go test -v
+   ```
+
+**Rules**:
+- ⚠️ **Never add Go code to `src/3rdparty/diagon/`** - keep C++ and Go separated
+- Extend Diagon C API rather than adding complex bridge logic in pkg/data/diagon
+- Keep CGO calls batched to minimize overhead
+- Use `analysis_go.go` (pure Go) by default; `analysis_cgo.go` (C++) only if needed
 
 ## Performance Considerations
 

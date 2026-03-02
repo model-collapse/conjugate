@@ -295,6 +295,12 @@ func (qc *QueryCache) Stats() map[CacheType]CacheStats {
 // generateLogicalPlanKey creates a cache key for a logical plan
 func (qc *QueryCache) generateLogicalPlanKey(indexName string, searchReq *parser.SearchRequest, shardIDs []int32) string {
 	// Create a normalized representation of the search request
+	// Merge Aggregations and Aggs fields (JSON "aggregations" vs "aggs")
+	aggs := searchReq.Aggregations
+	if aggs == nil {
+		aggs = searchReq.Aggs
+	}
+
 	keyData := struct {
 		Index        string
 		Query        interface{}
@@ -306,10 +312,10 @@ func (qc *QueryCache) generateLogicalPlanKey(indexName string, searchReq *parser
 	}{
 		Index:        indexName,
 		Query:        normalizeQuery(searchReq.ParsedQuery),
-		Aggregations: searchReq.Aggregations, // Use raw aggregations map
+		Aggregations: aggs,
 		Size:         searchReq.Size,
 		From:         searchReq.From,
-		Sort:         searchReq.Sort, // Use raw sort slice
+		Sort:         searchReq.Sort,
 		ShardIDs:     shardIDs,
 	}
 
@@ -327,13 +333,27 @@ func (qc *QueryCache) generateLogicalPlanKey(indexName string, searchReq *parser
 
 // generatePhysicalPlanKey creates a cache key for a physical plan
 func (qc *QueryCache) generatePhysicalPlanKey(indexName string, logicalPlan planner.LogicalPlan) string {
-	// Use the logical plan's string representation as part of the key
-	planStr := logicalPlan.String()
+	// Use the full logical plan tree representation (not just top-level node)
+	planStr := logicalPlanTreeString(logicalPlan)
 	keyStr := fmt.Sprintf("%s:%s", indexName, planStr)
 
 	// Hash the key
 	hash := sha256.Sum256([]byte(keyStr))
 	return "physical:" + hex.EncodeToString(hash[:])
+}
+
+// logicalPlanTreeString recursively serializes the entire logical plan tree.
+// This prevents cache collisions between plans that share the same top-level node
+// but differ in their subtrees (e.g., Limit(0,2) wrapping different queries).
+func logicalPlanTreeString(plan planner.LogicalPlan) string {
+	if plan == nil {
+		return "nil"
+	}
+	result := plan.String()
+	for _, child := range plan.Children() {
+		result += " > " + logicalPlanTreeString(child)
+	}
+	return result
 }
 
 // normalizeQuery normalizes a query for consistent caching

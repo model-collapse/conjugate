@@ -3,12 +3,14 @@ package integration
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/conjugate/conjugate/pkg/common/config"
 	"github.com/conjugate/conjugate/pkg/coordination"
 	"github.com/conjugate/conjugate/pkg/data"
@@ -72,7 +74,97 @@ type PortRange struct {
 	DataGRPCBase   int
 }
 
-// DefaultClusterConfig returns a sensible default configuration
+// getFreePort asks the kernel for a free open port that is ready to use.
+func getFreePort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+	if err != nil {
+		return 0, err
+	}
+
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// allocatePortRange allocates a contiguous range of free ports
+func allocatePortRange(count int) (int, error) {
+	// Get a free port as base
+	basePort, err := getFreePort()
+	if err != nil {
+		return 0, err
+	}
+
+	// Try to verify the next ports are also available
+	// If any are taken, try again with a new base
+	for attempt := 0; attempt < 10; attempt++ {
+		allFree := true
+		for i := 0; i < count; i++ {
+			addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("localhost:%d", basePort+i))
+			if err != nil {
+				allFree = false
+				break
+			}
+			l, err := net.ListenTCP("tcp", addr)
+			if err != nil {
+				allFree = false
+				break
+			}
+			l.Close()
+		}
+
+		if allFree {
+			return basePort, nil
+		}
+
+		// Try again with new base
+		basePort, err = getFreePort()
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return 0, fmt.Errorf("failed to allocate %d contiguous free ports after 10 attempts", count)
+}
+
+// DynamicClusterConfig returns a cluster configuration with dynamically allocated ports.
+// This is safe for parallel test execution.
+func DynamicClusterConfig() (*ClusterConfig, error) {
+	return DynamicClusterConfigWithSize(3, 1, 2)
+}
+
+// DynamicClusterConfigWithSize returns a cluster configuration with custom node counts
+// and dynamically allocated ports. This is safe for parallel test execution.
+func DynamicClusterConfigWithSize(numMasters, numCoord, numData int) (*ClusterConfig, error) {
+	// Calculate total ports needed
+	// Masters need: raft port + grpc port = 2 per master
+	// Coord needs: rest port = 1 per coord
+	// Data needs: grpc port = 1 per data
+	totalPorts := numMasters*2 + numCoord + numData + 3 // +3 for safety margin
+
+	basePort, err := allocatePortRange(totalPorts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ClusterConfig{
+		NumMasters:      numMasters,
+		NumCoordination: numCoord,
+		NumData:         numData,
+		StartPorts: PortRange{
+			MasterRaftBase: basePort,
+			MasterGRPCBase: basePort + numMasters,
+			CoordRESTBase:  basePort + numMasters*2,
+			DataGRPCBase:   basePort + numMasters*2 + numCoord,
+		},
+	}, nil
+}
+
+// DefaultClusterConfig returns a sensible default configuration with fixed ports.
+// WARNING: This uses hardcoded ports and is NOT safe for parallel test execution.
+// Use DynamicClusterConfig() instead for parallel tests.
 func DefaultClusterConfig() *ClusterConfig {
 	return &ClusterConfig{
 		NumMasters:      3,
@@ -85,6 +177,16 @@ func DefaultClusterConfig() *ClusterConfig {
 			DataGRPCBase:   19600,
 		},
 	}
+}
+
+// NewTestClusterWithDynamicPorts creates a test cluster with dynamically allocated ports.
+// This is the recommended way to create test clusters for parallel execution.
+func NewTestClusterWithDynamicPorts(t testing.TB) (*TestCluster, error) {
+	cfg, err := DynamicClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to allocate dynamic ports: %w", err)
+	}
+	return NewTestCluster(t, cfg)
 }
 
 // NewTestCluster creates a new test cluster
@@ -185,7 +287,9 @@ func (tc *TestCluster) createCoordinationNodes(cfg *ClusterConfig) error {
 			LogLevel:   "debug",
 		}
 
-		node, err := coordination.NewCoordinationNode(coordCfg, tc.logger)
+		// Use a custom prometheus registry for each node to avoid duplicate registration in tests
+		registry := prometheus.NewRegistry()
+		node, err := coordination.NewCoordinationNodeWithRegistry(coordCfg, tc.logger, registry)
 		if err != nil {
 			return fmt.Errorf("failed to create coordination node %s: %w", nodeID, err)
 		}
@@ -262,17 +366,22 @@ func (tc *TestCluster) Start(ctx context.Context) error {
 		return fmt.Errorf("leader election failed: %w", err)
 	}
 
-	// Start coordination nodes
-	for _, wrapper := range tc.coordNodes {
-		if err := tc.startCoordNode(ctx, wrapper); err != nil {
-			return fmt.Errorf("failed to start coordination node: %w", err)
-		}
-	}
-
-	// Start data nodes
+	// Start data nodes BEFORE coordination nodes
+	// This ensures data nodes register with master before coordination tries to discover them
 	for _, wrapper := range tc.dataNodes {
 		if err := tc.startDataNode(ctx, wrapper); err != nil {
 			return fmt.Errorf("failed to start data node: %w", err)
+		}
+	}
+
+	// Give data nodes a moment to register with master
+	time.Sleep(500 * time.Millisecond)
+
+	// Start coordination nodes
+	// They will discover data nodes during their Start() method
+	for _, wrapper := range tc.coordNodes {
+		if err := tc.startCoordNode(ctx, wrapper); err != nil {
+			return fmt.Errorf("failed to start coordination node: %w", err)
 		}
 	}
 
@@ -500,8 +609,18 @@ func (tc *TestCluster) WaitForClusterReady(timeout time.Duration) error {
 		return err
 	}
 
-	// Wait for all data nodes to register (TODO: implement when gRPC is ready)
-	time.Sleep(1 * time.Second)
+	// Wait for data nodes to register with master and coordination to discover them
+	// Data nodes send heartbeats immediately after startup and register
+	// Coordination node discovers data nodes during its Start() method
+	// We wait a bit to ensure this process completes
+	expectedDataNodes := len(tc.dataNodes)
+	tc.logger.Info("Waiting for data node registration and discovery",
+		zap.Int("expected_nodes", expectedDataNodes))
 
+	// Wait 2 seconds for nodes to register and be discovered
+	// This is more than enough for the registration and discovery process
+	time.Sleep(2 * time.Second)
+
+	tc.logger.Info("Cluster should be ready")
 	return nil
 }

@@ -12,8 +12,8 @@ func TestRESTAPIClusterHealth(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -56,8 +56,8 @@ func TestRESTAPIRootEndpoint(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -105,8 +105,8 @@ func TestRESTAPIIndexCRUD(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -172,8 +172,8 @@ func TestRESTAPISearch(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -229,8 +229,8 @@ func TestRESTAPISearchWithQuery(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -306,8 +306,8 @@ func TestRESTAPIClusterState(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -353,8 +353,8 @@ func TestRESTAPINodes(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
@@ -409,8 +409,8 @@ func TestRESTAPICount(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	cfg := DefaultClusterConfig()
-	cluster, err := NewTestCluster(t, cfg)
+	// Using dynamic port allocation
+	cluster, err := NewTestClusterWithDynamicPorts(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cluster: %v", err)
 	}
