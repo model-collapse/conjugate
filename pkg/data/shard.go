@@ -124,8 +124,8 @@ func (sm *ShardManager) CreateShard(ctx context.Context, indexName string, shard
 		refreshInterval:  5 * time.Second,    // Default: refresh every 5 seconds
 		stopCommitter:    make(chan struct{}),
 		stopRefresher:    make(chan struct{}),
-		needsCommit:      false,
-		needsRefresh:     false,
+		needsCommit:       false,
+		needsRefresh:      false,
 	}
 
 	// Start background committer and refresher
@@ -311,13 +311,13 @@ func (sm *ShardManager) loadShards() error {
 				pendingDocs:      0,
 				lastCommitTime:   time.Now(),
 				lastRefreshTime:  time.Now(),
-				commitBatchSize:  10000,              // Default: commit every 10000 docs
-				commitInterval:   5 * time.Second,    // Default: commit every 5 seconds
-				refreshInterval:  5 * time.Second,    // Default: refresh every 5 seconds
-				stopCommitter:    make(chan struct{}),
-				stopRefresher:    make(chan struct{}),
-				needsCommit:      false,
-				needsRefresh:     false,
+				commitBatchSize:   10000,              // Default: commit every 10000 docs
+				commitInterval:    5 * time.Second,    // Default: commit every 5 seconds
+				refreshInterval:   5 * time.Second,    // Default: refresh every 5 seconds
+				stopCommitter:     make(chan struct{}),
+				stopRefresher:     make(chan struct{}),
+				needsCommit:       false,
+				needsRefresh:      false,
 			}
 
 			// Start background committer and refresher

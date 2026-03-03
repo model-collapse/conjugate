@@ -445,6 +445,7 @@ func (db *DiagonBridge) CreateShard(path string) (*Shard, error) {
 	// Create IndexWriter config
 	config := C.diagon_create_index_writer_config()
 	C.diagon_config_set_ram_buffer_size(config, 256.0)                  // 256MB buffer (tuned for bulk throughput)
+	C.diagon_config_set_max_buffered_docs(config, 100000)              // Let RAM buffer control flushing (default 1000 caused segment explosion)
 	C.diagon_config_set_open_mode(config, 2)                            // CREATE_OR_APPEND
 	C.diagon_config_set_commit_on_close(config, true)
 
