@@ -207,11 +207,43 @@ static int batch_extract_two_fields(
     }
     return num_results;
 }
+
+// CStringArena: memory arena for batched CString allocations.
+// Reduces malloc/free overhead from ~80,000 calls to 1 per 5K-doc batch.
+typedef struct {
+    char* buf;
+    size_t pos;
+    size_t cap;
+} CStringArena;
+
+static CStringArena* arena_create(size_t cap) {
+    CStringArena* a = (CStringArena*)malloc(sizeof(CStringArena));
+    if (!a) return NULL;
+    a->buf = (char*)malloc(cap);
+    if (!a->buf) { free(a); return NULL; }
+    a->pos = 0;
+    a->cap = cap;
+    return a;
+}
+
+static char* arena_cstring_bytes(CStringArena* a, const void* src, size_t len) {
+    if (!a || a->pos + len + 1 > a->cap) return NULL;
+    char* ptr = a->buf + a->pos;
+    memcpy(ptr, src, len);
+    ptr[len] = '\0';
+    a->pos += len + 1;
+    return ptr;
+}
+
+static void arena_free(CStringArena* a) {
+    if (a) { free(a->buf); free(a); }
+}
 */
 import "C"
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -412,7 +444,7 @@ func (db *DiagonBridge) CreateShard(path string) (*Shard, error) {
 
 	// Create IndexWriter config
 	config := C.diagon_create_index_writer_config()
-	C.diagon_config_set_ram_buffer_size(config, 64.0)                   // 64MB buffer
+	C.diagon_config_set_ram_buffer_size(config, 256.0)                  // 256MB buffer (tuned for bulk throughput)
 	C.diagon_config_set_open_mode(config, 2)                            // CREATE_OR_APPEND
 	C.diagon_config_set_commit_on_close(config, true)
 
@@ -712,6 +744,196 @@ func cStringFromBytes(b []byte) *C.char {
 	return cstr
 }
 
+// arenaAllocCString allocates a null-terminated C string from the arena.
+// Returns (cstring, true) if arena succeeded; (cstring, false) if fallback to C.CString.
+func arenaAllocCString(arena *C.CStringArena, s string) (*C.char, bool) {
+	b := []byte(s)
+	if len(b) == 0 {
+		b = []byte{0}
+		cs := C.arena_cstring_bytes(arena, unsafe.Pointer(&b[0]), 0)
+		if cs == nil {
+			return C.CString(""), false
+		}
+		return cs, true
+	}
+	cs := C.arena_cstring_bytes(arena, unsafe.Pointer(&b[0]), C.size_t(len(b)))
+	if cs == nil {
+		return C.CString(s), false
+	}
+	return cs, true
+}
+
+// arenaAllocCStringFromBytes allocates from arena using []byte directly.
+func arenaAllocCStringFromBytes(arena *C.CStringArena, b []byte) (*C.char, bool) {
+	if len(b) == 0 {
+		empty := []byte{0}
+		cs := C.arena_cstring_bytes(arena, unsafe.Pointer(&empty[0]), 0)
+		if cs == nil {
+			return cStringFromBytes(nil), false
+		}
+		return cs, true
+	}
+	cs := C.arena_cstring_bytes(arena, unsafe.Pointer(&b[0]), C.size_t(len(b)))
+	if cs == nil {
+		return cStringFromBytes(b), false
+	}
+	return cs, true
+}
+
+// processDocChunk processes a range of documents [start, end) for BulkIndexDocuments.
+// Each call uses its own arena and caches — safe for concurrent use.
+func processDocChunk(docs []struct {
+	ID         string
+	Doc        map[string]interface{}
+	SourceJSON []byte
+}, start, end int, cDocs []C.DiagonDocument) error {
+	arenaSize := C.size_t(2 * 1024 * 1024) // 2MB per worker
+	arena := C.arena_create(arenaSize)
+	if arena == nil {
+		return fmt.Errorf("failed to create arena for chunk [%d,%d)", start, end)
+	}
+	defer C.arena_free(arena)
+
+	fieldNameCache := make(map[string]*C.char, 32)
+	valueCache := make(map[string]*C.char, 256)
+	fallbackPtrs := make([]unsafe.Pointer, 0, 8)
+
+	for i := start; i < end; i++ {
+		item := docs[i]
+		diagonDoc := C.diagon_create_document()
+
+		// _id field
+		cDocID, inArena := arenaAllocCString(arena, item.ID)
+		if !inArena {
+			fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cDocID))
+		}
+		idField := C.diagon_create_string_field(cachedIDFieldName, cDocID)
+		C.diagon_document_add_field(diagonDoc, idField)
+		storedIDField := C.diagon_create_stored_field(cachedIDFieldName, cDocID)
+		C.diagon_document_add_field(diagonDoc, storedIDField)
+
+		// _source field
+		sourceBytes := item.SourceJSON
+		if sourceBytes == nil {
+			sourceBytes, _ = json.Marshal(item.Doc)
+		}
+		if len(sourceBytes) > 0 {
+			cSourceValue, inArena := arenaAllocCStringFromBytes(arena, sourceBytes)
+			if !inArena {
+				fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cSourceValue))
+			}
+			sourceField := C.diagon_create_stored_field(cachedSourceFieldName, cSourceValue)
+			C.diagon_document_add_field(diagonDoc, sourceField)
+		}
+
+		// Flatten and index user fields
+		flatDoc := flattenMap("", item.Doc)
+		for key, value := range flatDoc {
+			cFieldName, ok := fieldNameCache[key]
+			if !ok {
+				cFieldName, inArena = arenaAllocCString(arena, key)
+				if !inArena {
+					fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cFieldName))
+				}
+				fieldNameCache[key] = cFieldName
+			}
+
+			switch v := value.(type) {
+			case string:
+				if epochMs, isDate := tryParseDateToEpochMs(v); isDate {
+					doubleField := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(epochMs)))
+					C.diagon_document_add_field(diagonDoc, doubleField)
+					cValue, inArena := arenaAllocCString(arena, v)
+					if !inArena {
+						fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cValue))
+					}
+					storedField := C.diagon_create_stored_field(cFieldName, cValue)
+					C.diagon_document_add_field(diagonDoc, storedField)
+				} else if isKeywordLike(v) {
+					cValue, cached := valueCache[v]
+					if !cached {
+						cValue, inArena = arenaAllocCString(arena, v)
+						if !inArena {
+							fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cValue))
+						}
+						valueCache[v] = cValue
+					}
+					stringField := C.diagon_create_string_field(cFieldName, cValue)
+					C.diagon_document_add_field(diagonDoc, stringField)
+					storedField := C.diagon_create_stored_field(cFieldName, cValue)
+					C.diagon_document_add_field(diagonDoc, storedField)
+				} else {
+					cValue, inArena := arenaAllocCString(arena, v)
+					if !inArena {
+						fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cValue))
+					}
+					field := C.diagon_create_text_field(cFieldName, cValue)
+					C.diagon_document_add_field(diagonDoc, field)
+					stringField := C.diagon_create_string_field(cFieldName, cValue)
+					C.diagon_document_add_field(diagonDoc, stringField)
+				}
+
+			case int, int32, int64:
+				val := int64(0)
+				switch iv := v.(type) {
+				case int:
+					val = int64(iv)
+				case int32:
+					val = int64(iv)
+				case int64:
+					val = iv
+				}
+				field := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(val)))
+				C.diagon_document_add_field(diagonDoc, field)
+				cValueStr, inArena := arenaAllocCString(arena, strconv.FormatInt(val, 10))
+				if !inArena {
+					fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cValueStr))
+				}
+				storedField := C.diagon_create_stored_field(cFieldName, cValueStr)
+				C.diagon_document_add_field(diagonDoc, storedField)
+
+			case float32, float64:
+				val := float64(0)
+				switch fv := v.(type) {
+				case float32:
+					val = float64(fv)
+				case float64:
+					val = fv
+				}
+				field := C.diagon_create_indexed_double_field(cFieldName, C.double(val))
+				C.diagon_document_add_field(diagonDoc, field)
+				cValueStr, inArena := arenaAllocCString(arena, strconv.FormatFloat(val, 'f', 6, 64))
+				if !inArena {
+					fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cValueStr))
+				}
+				storedField := C.diagon_create_stored_field(cFieldName, cValueStr)
+				C.diagon_document_add_field(diagonDoc, storedField)
+
+			default:
+				jsonBytes, err := json.Marshal(v)
+				if err != nil {
+					continue
+				}
+				cValue, inArena := arenaAllocCStringFromBytes(arena, jsonBytes)
+				if !inArena {
+					fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cValue))
+				}
+				field := C.diagon_create_stored_field(cFieldName, cValue)
+				C.diagon_document_add_field(diagonDoc, field)
+			}
+		}
+
+		cDocs[i] = diagonDoc
+	}
+
+	// Free fallback allocations (arena strings freed with arena)
+	for _, ptr := range fallbackPtrs {
+		C.free(ptr)
+	}
+	// Field name cache strings are in arena — freed with arena
+	return nil
+}
+
 // BulkIndexDocuments indexes multiple documents in a batch to reduce CGO overhead.
 // Optimizations over per-document IndexDocument:
 //   - Uses diagon_add_documents batch API (single mutex acquisition in C++)
@@ -739,137 +961,58 @@ func (s *Shard) BulkIndexDocuments(docs []struct {
 		zap.Int("num_docs", numDocs))
 
 	// Allocate C array for batch diagon_add_documents call.
-	// Using C.malloc avoids CGO pointer-checking rules (Go slice of
-	// unsafe.Pointer would trigger cgocheck since values look like pointers).
 	cDocsRaw := C.malloc(C.size_t(numDocs) * C.size_t(unsafe.Sizeof(uintptr(0))))
 	defer C.free(cDocsRaw)
 	cDocs := unsafe.Slice((*C.DiagonDocument)(cDocsRaw), numDocs)
 
-	// Field name cache: allocated once per batch, reused across all docs.
-	// Typical Big5 doc has ~15 fields; pre-size to avoid rehash.
-	fieldNameCache := make(map[string]*C.char, 32)
+	// Parallel document preparation: split across workers.
+	// Each worker gets its own arena, field name cache, and value cache.
+	numWorkers := 8
+	if maxProcs := runtime.GOMAXPROCS(0); maxProcs < numWorkers {
+		numWorkers = maxProcs
+	}
+	if numDocs < numWorkers*10 {
+		numWorkers = 1 // sequential for small batches
+	}
 
-	// Per-document temporary C string pointers (values only, not field names).
-	// Pre-allocate for typical doc: 1 docID + 1 source + ~15 field values.
-	tmpPtrs := make([]unsafe.Pointer, 0, 20)
-
-	for i, item := range docs {
-		tmpPtrs = tmpPtrs[:0]
-
-		diagonDoc := C.diagon_create_document()
-
-		// _id field: indexed + stored, using cached field name
-		cDocID := C.CString(item.ID)
-		tmpPtrs = append(tmpPtrs, unsafe.Pointer(cDocID))
-
-		idField := C.diagon_create_string_field(cachedIDFieldName, cDocID)
-		C.diagon_document_add_field(diagonDoc, idField)
-		storedIDField := C.diagon_create_stored_field(cachedIDFieldName, cDocID)
-		C.diagon_document_add_field(diagonDoc, storedIDField)
-
-		// _source field: stored JSON, using cached field name.
-		// cStringFromBytes avoids the []byte→string→C double-copy.
-		sourceBytes := item.SourceJSON
-		if sourceBytes == nil {
-			sourceBytes, _ = json.Marshal(item.Doc)
+	if numWorkers == 1 {
+		// Sequential path
+		if err := processDocChunk(docs, 0, numDocs, cDocs); err != nil {
+			return err
 		}
-		if len(sourceBytes) > 0 {
-			cSourceValue := cStringFromBytes(sourceBytes)
-			tmpPtrs = append(tmpPtrs, unsafe.Pointer(cSourceValue))
-			sourceField := C.diagon_create_stored_field(cachedSourceFieldName, cSourceValue)
-			C.diagon_document_add_field(diagonDoc, sourceField)
-		}
+	} else {
+		// Parallel path
+		chunkSize := (numDocs + numWorkers - 1) / numWorkers
+		var wg sync.WaitGroup
+		workerErrors := make([]error, numWorkers)
 
-		// Flatten nested objects and index user fields
-		flatDoc := flattenMap("", item.Doc)
-		for key, value := range flatDoc {
-			// Lookup or create cached field name CString
-			cFieldName, ok := fieldNameCache[key]
-			if !ok {
-				cFieldName = C.CString(key)
-				fieldNameCache[key] = cFieldName
+		for w := 0; w < numWorkers; w++ {
+			start := w * chunkSize
+			end := start + chunkSize
+			if start >= numDocs {
+				break
 			}
-
-			switch v := value.(type) {
-			case string:
-				if epochMs, isDate := tryParseDateToEpochMs(v); isDate {
-					doubleField := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(epochMs)))
-					C.diagon_document_add_field(diagonDoc, doubleField)
-					cValue := C.CString(v)
-					tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValue))
-					storedField := C.diagon_create_stored_field(cFieldName, cValue)
-					C.diagon_document_add_field(diagonDoc, storedField)
-				} else if isKeywordLike(v) {
-					cValue := C.CString(v)
-					tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValue))
-					stringField := C.diagon_create_string_field(cFieldName, cValue)
-					C.diagon_document_add_field(diagonDoc, stringField)
-					storedField := C.diagon_create_stored_field(cFieldName, cValue)
-					C.diagon_document_add_field(diagonDoc, storedField)
-				} else {
-					cValue := C.CString(v)
-					tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValue))
-					field := C.diagon_create_text_field(cFieldName, cValue)
-					C.diagon_document_add_field(diagonDoc, field)
-					stringField := C.diagon_create_string_field(cFieldName, cValue)
-					C.diagon_document_add_field(diagonDoc, stringField)
-				}
-
-			case int, int32, int64:
-				val := int64(0)
-				switch iv := v.(type) {
-				case int:
-					val = int64(iv)
-				case int32:
-					val = int64(iv)
-				case int64:
-					val = iv
-				}
-				// Use indexed_double_field for consistent range query support.
-				// numeric_range_query uses bit_cast which corrupts values;
-				// double_range_query compares doubles directly.
-				field := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(val)))
-				C.diagon_document_add_field(diagonDoc, field)
-
-				cValueStr := C.CString(strconv.FormatInt(val, 10))
-				tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValueStr))
-				storedField := C.diagon_create_stored_field(cFieldName, cValueStr)
-				C.diagon_document_add_field(diagonDoc, storedField)
-
-			case float32, float64:
-				val := float64(0)
-				switch fv := v.(type) {
-				case float32:
-					val = float64(fv)
-				case float64:
-					val = fv
-				}
-				field := C.diagon_create_indexed_double_field(cFieldName, C.double(val))
-				C.diagon_document_add_field(diagonDoc, field)
-
-				cValueStr := C.CString(strconv.FormatFloat(val, 'f', 6, 64))
-				tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValueStr))
-				storedField := C.diagon_create_stored_field(cFieldName, cValueStr)
-				C.diagon_document_add_field(diagonDoc, storedField)
-
-			default:
-				jsonBytes, err := json.Marshal(v)
-				if err != nil {
-					continue
-				}
-				cValue := cStringFromBytes(jsonBytes)
-				tmpPtrs = append(tmpPtrs, unsafe.Pointer(cValue))
-				field := C.diagon_create_stored_field(cFieldName, cValue)
-				C.diagon_document_add_field(diagonDoc, field)
+			if end > numDocs {
+				end = numDocs
 			}
+			wg.Add(1)
+			go func(workerID, s, e int) {
+				defer wg.Done()
+				workerErrors[workerID] = processDocChunk(docs, s, e, cDocs)
+			}(w, start, end)
 		}
+		wg.Wait()
 
-		cDocs[i] = diagonDoc
-
-		// Free per-document value strings immediately.
-		// Field creation functions copy the data, so strings are no longer needed.
-		for _, ptr := range tmpPtrs {
-			C.free(ptr)
+		for _, err := range workerErrors {
+			if err != nil {
+				// Cleanup any created documents on error
+				for i := 0; i < numDocs; i++ {
+					if cDocs[i] != nil {
+						C.diagon_free_document(cDocs[i])
+					}
+				}
+				return err
+			}
 		}
 	}
 
@@ -879,11 +1022,6 @@ func (s *Shard) BulkIndexDocuments(docs []struct {
 	// Free all document handles
 	for i := 0; i < numDocs; i++ {
 		C.diagon_free_document(cDocs[i])
-	}
-
-	// Free cached field name CStrings
-	for _, cs := range fieldNameCache {
-		C.free(unsafe.Pointer(cs))
 	}
 
 	if int(result) < 0 {

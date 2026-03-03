@@ -119,8 +119,8 @@ func (sm *ShardManager) CreateShard(ctx context.Context, indexName string, shard
 		pendingDocs:      0,
 		lastCommitTime:   time.Now(),
 		lastRefreshTime:  time.Now(),
-		commitBatchSize:  10000,              // Default: commit every 10000 docs
-		commitInterval:   5 * time.Second,    // Default: commit every 5 seconds
+		commitBatchSize:  50000,              // Tuned: commit every 50000 docs for bulk throughput
+		commitInterval:   30 * time.Second,   // Tuned: commit every 30s for bulk throughput
 		refreshInterval:  5 * time.Second,    // Default: refresh every 5 seconds
 		stopCommitter:    make(chan struct{}),
 		stopRefresher:    make(chan struct{}),
