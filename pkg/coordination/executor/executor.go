@@ -76,7 +76,7 @@ var (
 
 // DataNodeClient interface for communication with data nodes
 type DataNodeClient interface {
-	Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte, maxResults int) (*pb.SearchResponse, error)
+	Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte, maxResults int, sort []string) (*pb.SearchResponse, error)
 	Count(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte) (*pb.CountResponse, error)
 	IsConnected() bool
 	Connect(ctx context.Context) error
@@ -129,8 +129,9 @@ func (qe *QueryExecutor) HasDataNodeClient(nodeID string) bool {
 	return exists
 }
 
-// ExecuteSearch executes a search query across all relevant shards
-func (qe *QueryExecutor) ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpression []byte, from, size int) (*SearchResult, error) {
+// ExecuteSearch executes a search query across all relevant shards.
+// sort is optional; when non-nil, it is forwarded to data nodes (e.g. ["@timestamp:desc"]).
+func (qe *QueryExecutor) ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpression []byte, from, size int, sort []string) (*SearchResult, error) {
 	startTime := time.Now()
 
 	qe.logger.Debug("ExecuteSearch",
@@ -250,7 +251,7 @@ func (qe *QueryExecutor) ExecuteSearch(ctx context.Context, indexName string, qu
 			}
 
 			// Execute search on shard
-			resp, err := client.Search(ctx, indexName, sid, query, filterExpression, size)
+			resp, err := client.Search(ctx, indexName, sid, query, filterExpression, size, sort)
 
 			if err != nil {
 				shardQueryFailures.WithLabelValues(

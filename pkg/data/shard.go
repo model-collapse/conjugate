@@ -119,9 +119,9 @@ func (sm *ShardManager) CreateShard(ctx context.Context, indexName string, shard
 		pendingDocs:      0,
 		lastCommitTime:   time.Now(),
 		lastRefreshTime:  time.Now(),
-		commitBatchSize:  50000,              // Tuned: commit every 50000 docs for bulk throughput
+		commitBatchSize:  500000,             // Tuned: large batch for fewer segments during bulk indexing
 		commitInterval:   30 * time.Second,   // Tuned: commit every 30s for bulk throughput
-		refreshInterval:  5 * time.Second,    // Default: refresh every 5 seconds
+		refreshInterval:  30 * time.Second,   // Tuned: refresh every 30s for bulk throughput
 		stopCommitter:    make(chan struct{}),
 		stopRefresher:    make(chan struct{}),
 		needsCommit:       false,
@@ -311,9 +311,9 @@ func (sm *ShardManager) loadShards() error {
 				pendingDocs:      0,
 				lastCommitTime:   time.Now(),
 				lastRefreshTime:  time.Now(),
-				commitBatchSize:   10000,              // Default: commit every 10000 docs
-				commitInterval:    5 * time.Second,    // Default: commit every 5 seconds
-				refreshInterval:   5 * time.Second,    // Default: refresh every 5 seconds
+				commitBatchSize:  500000,             // Tuned: large batch for fewer segments during bulk indexing
+				commitInterval:   30 * time.Second,   // Tuned: commit every 30s for bulk throughput
+				refreshInterval:  30 * time.Second,   // Tuned: refresh every 30s for bulk throughput
 				stopCommitter:     make(chan struct{}),
 				stopRefresher:     make(chan struct{}),
 				needsCommit:       false,
@@ -327,6 +327,17 @@ func (sm *ShardManager) loadShards() error {
 			sm.mu.Lock()
 			sm.shards[key] = shard
 			sm.mu.Unlock()
+
+			// Proactively warm the reader in background so the first search
+			// doesn't block for minutes on large indices (60GB+).
+			go func(sh *Shard) {
+				sh.logger.Info("Warming reader in background...")
+				if err := sh.DiagonShard.WarmReader(); err != nil {
+					sh.logger.Warn("Background reader warm failed", zap.Error(err))
+				} else {
+					sh.logger.Info("Reader warmed successfully")
+				}
+			}(shard)
 
 			shardsLoaded++
 			sm.logger.Info("Loaded shard from disk",
@@ -376,6 +387,7 @@ type Shard struct {
 	stopRefresher     chan struct{} // Signal to stop background refresher
 	needsCommit       bool          // Flag indicating pending changes need commit
 	needsRefresh      bool          // Flag indicating committed changes need refresh
+	commitInProgress  bool          // Guard: true while C++ Commit is running (prevents goroutine pile-up)
 }
 
 // ShardState represents the state of a shard
@@ -571,13 +583,30 @@ func (s *Shard) commitBatch() error {
 		return nil
 	}
 
+	// Guard: if another goroutine is already in C++ Commit (which may block
+	// on waitForMerges for minutes during large merges), skip this commit.
+	// Without this guard, multiple goroutines pile up on C++ commitLock_,
+	// exhausting all gRPC handlers and making the node completely unresponsive.
+	if s.commitInProgress {
+		return nil
+	}
+
 	startTime := time.Now()
 	pendingCount := s.pendingDocs
+	s.commitInProgress = true
 
-	// Commit to disk (durability)
-	if err := s.DiagonShard.Commit(); err != nil {
-		s.logger.Error("Commit failed", zap.Error(err))
-		return fmt.Errorf("failed to commit: %w", err)
+	// Release Go mutex before the heavy C++ commit call.
+	// Diagon's IndexWriter has its own commitLock_ so concurrent addDocuments
+	// is safe. This prevents commit (which may waitForMerges) from blocking
+	// all bulk indexing on the Go side.
+	s.mu.Unlock()
+	commitErr := s.DiagonShard.Commit()
+	s.mu.Lock()
+	s.commitInProgress = false
+
+	if commitErr != nil {
+		s.logger.Error("Commit failed", zap.Error(commitErr))
+		return fmt.Errorf("failed to commit: %w", commitErr)
 	}
 
 	duration := time.Since(startTime)
@@ -699,17 +728,18 @@ func (s *Shard) GetBatchStats() map[string]interface{} {
 // Much faster for aggregation-only queries.
 func (s *Shard) SearchFieldsOnly(ctx context.Context, query []byte, maxResults int, fields []string) (*diagon.SearchResult, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if s.State != ShardStateStarted {
+		s.mu.RUnlock()
 		return nil, fmt.Errorf("shard is not ready")
 	}
+	diagonShard := s.DiagonShard
+	s.mu.RUnlock()
 
 	if maxResults <= 0 {
 		maxResults = 100
 	}
 
-	result, err := s.DiagonShard.SearchFieldsOnly(query, nil, maxResults, fields)
+	result, err := diagonShard.SearchFieldsOnly(query, nil, maxResults, fields)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute search: %w", err)
 	}
@@ -717,54 +747,63 @@ func (s *Shard) SearchFieldsOnly(ctx context.Context, query []byte, maxResults i
 	return result, nil
 }
 
-// Search executes a search query on the shard
-func (s *Shard) Search(ctx context.Context, query []byte, maxResults int) (*diagon.SearchResult, error) {
+// Search executes a search query on the shard.
+// sort is optional; when non-nil, forwarded to Diagon for optimized retrieval (e.g. reverse doc read for desc sort).
+func (s *Shard) Search(ctx context.Context, query []byte, maxResults int, sort []string) (*diagon.SearchResult, error) {
+	// Snapshot shard state under RLock, then release before calling bridge.
+	// Bridge has its own locking (diagon.Shard.mu). Holding data.Shard.mu
+	// across bridge calls causes deadlock with background committer/refresher.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if s.State != ShardStateStarted {
+		s.mu.RUnlock()
 		return nil, fmt.Errorf("shard is not ready")
 	}
+	diagonShard := s.DiagonShard
+	udfFilter := s.udfFilter
+	logger := s.logger
+	indexName := s.IndexName
+	shardID := s.ShardID
+	s.mu.RUnlock()
 
 	if maxResults <= 0 {
 		maxResults = 100
 	}
 
 	// Check for WASM UDF query BEFORE passing to Diagon (Diagon doesn't support wasm_udf type)
-	if s.udfFilter != nil && s.udfFilter.HasWasmUDFQuery(query) {
-		s.logger.Debug("Detected WASM UDF query, using match_all for Diagon search")
+	if udfFilter != nil && udfFilter.HasWasmUDFQuery(query) {
+		logger.Debug("Detected WASM UDF query, using match_all for Diagon search")
 
 		// For UDF queries, run a match_all through Diagon first to get candidate documents
 		diagonQuery := extractDiagonQuery(query)
 
-		result, err := s.DiagonShard.SearchWithLimit(diagonQuery, nil, maxResults)
+		result, err := diagonShard.SearchWithLimit(diagonQuery, nil, maxResults)
 		if err != nil {
 			return nil, fmt.Errorf("failed to execute search: %w", err)
 		}
 
-		s.logger.Debug("Applying WASM UDF filter",
+		logger.Debug("Applying WASM UDF filter",
 			zap.Int64("candidate_hits", result.TotalHits))
 
-		filteredResult, err := s.udfFilter.FilterResults(ctx, query, result)
+		filteredResult, err := udfFilter.FilterResults(ctx, query, result)
 		if err != nil {
 			// Log error but return original results
-			s.logger.Error("Failed to apply UDF filter",
+			logger.Error("Failed to apply UDF filter",
 				zap.Error(err),
-				zap.String("index", s.IndexName),
-				zap.Int32("shard_id", s.ShardID))
+				zap.String("index", indexName),
+				zap.Int32("shard_id", shardID))
 			return result, nil
 		}
 
 		return filteredResult, nil
 	}
 
-	// Execute search using Diagon (pass empty filterExpression)
-	result, err := s.DiagonShard.SearchWithLimit(query, nil, maxResults)
+	// Execute search using Diagon
+	result, err := diagonShard.SearchWithSort(query, nil, maxResults, sort)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute search: %w", err)
 	}
 
-	s.logger.Debug("Executed search",
+	logger.Debug("Executed search",
 		zap.Int64("total_hits", result.TotalHits),
 		zap.Int("num_hits", len(result.Hits)))
 
@@ -774,14 +813,15 @@ func (s *Shard) Search(ctx context.Context, query []byte, maxResults int) (*diag
 // GetDocument retrieves a document by ID
 func (s *Shard) GetDocument(ctx context.Context, docID string) (map[string]interface{}, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if s.State != ShardStateStarted {
+		s.mu.RUnlock()
 		return nil, fmt.Errorf("shard is not ready")
 	}
+	diagonShard := s.DiagonShard
+	s.mu.RUnlock()
 
 	// Get document using Diagon
-	doc, err := s.DiagonShard.GetDocument(docID)
+	doc, err := diagonShard.GetDocument(docID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get document: %w", err)
 	}

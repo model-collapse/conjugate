@@ -153,7 +153,7 @@ func TestIntegration_SimpleUDFQuery(t *testing.T) {
 		}
 	}`)
 
-	result, err := shard.Search(ctx, queryJSON, 100)
+	result, err := shard.Search(ctx, queryJSON, 100, nil)
 	require.NoError(t, err)
 
 	// Should return all 3 documents (UDF returns true for all)
@@ -213,7 +213,7 @@ func TestIntegration_UDFFiltersOutAll(t *testing.T) {
 		}
 	}`)
 
-	result, err := shard.Search(ctx, queryJSON, 100)
+	result, err := shard.Search(ctx, queryJSON, 100, nil)
 	require.NoError(t, err)
 
 	// Should return 0 documents (UDF returns false for all)
@@ -283,7 +283,7 @@ func TestIntegration_BoolQueryWithUDF(t *testing.T) {
 		}
 	}`)
 
-	result, err := shard.Search(ctx, queryJSON, 100)
+	result, err := shard.Search(ctx, queryJSON, 100, nil)
 	require.NoError(t, err)
 
 	// UDF returns true for all, so we should get electronics docs
@@ -316,7 +316,7 @@ func TestIntegration_NoUDFQuery(t *testing.T) {
 		}
 	}`)
 
-	result, err := shard.Search(ctx, queryJSON, 100)
+	result, err := shard.Search(ctx, queryJSON, 100, nil)
 	require.NoError(t, err)
 
 	// Should work normally without UDF filtering
@@ -380,7 +380,7 @@ func TestIntegration_UDFWithParameters(t *testing.T) {
 		}
 	}`)
 
-	result, err := shard.Search(ctx, queryJSON, 100)
+	result, err := shard.Search(ctx, queryJSON, 100, nil)
 	require.NoError(t, err)
 
 	// Verify parameters were parsed (UDF always returns true, so all docs match)
@@ -412,7 +412,7 @@ func TestIntegration_UDFNotFound(t *testing.T) {
 		}
 	}`)
 
-	result, err := shard.Search(ctx, queryJSON, 100)
+	result, err := shard.Search(ctx, queryJSON, 100, nil)
 
 	// Should still return a result (error is logged, but search continues)
 	// The UDF filter returns original results on error
@@ -469,7 +469,7 @@ func TestIntegration_MultipleDocuments(t *testing.T) {
 		}
 	}`)
 
-	result, err := shard.Search(ctx, queryJSON, 100)
+	result, err := shard.Search(ctx, queryJSON, 100, nil)
 	require.NoError(t, err)
 
 	// Verify all documents were processed
@@ -526,7 +526,7 @@ func TestIntegration_ConcurrentQueries(t *testing.T) {
 
 	for i := 0; i < numQueries; i++ {
 		go func() {
-			_, err := shard.Search(ctx, queryJSON, 100)
+			_, err := shard.Search(ctx, queryJSON, 100, nil)
 			results <- err
 		}()
 	}
@@ -580,7 +580,7 @@ func TestIntegration_UDFStatistics(t *testing.T) {
 		}
 	}`)
 
-	_, err = shard.Search(ctx, queryJSON, 100)
+	_, err = shard.Search(ctx, queryJSON, 100, nil)
 	require.NoError(t, err)
 
 	// Check UDF statistics
@@ -663,7 +663,7 @@ func BenchmarkIntegration_UDFQuery(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		shard.Search(ctx, queryJSON, 100)
+		shard.Search(ctx, queryJSON, 100, nil)
 	}
 }
 

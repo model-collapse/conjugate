@@ -383,7 +383,7 @@ func TestShard_Search(t *testing.T) {
 
 	// Execute search with match_all query
 	query := []byte(`{"match_all": {}}`)
-	result, err := shard.Search(ctx, query, 100)
+	result, err := shard.Search(ctx, query, 100, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	// Should return both indexed documents
@@ -531,7 +531,7 @@ func TestShard_OperationsOnClosedShard(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not ready")
 
-	_, err = shard.Search(ctx, []byte("{}"), 100)
+	_, err = shard.Search(ctx, []byte("{}"), 100, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not ready")
 

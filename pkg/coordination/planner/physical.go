@@ -87,6 +87,7 @@ type PhysicalScan struct {
 	EstimatedCost *Cost
 	MaxResults   int              // Max docs to retrieve from data node (0 = default 100)
 	Aggregations []*Aggregation   // Aggregations to push down to data node
+	Sort         []string         // Sort fields pushed to data node (e.g. ["@timestamp:desc"])
 }
 
 func (s *PhysicalScan) Type() PhysicalPlanType      { return PhysicalPlanTypeScan }
@@ -155,6 +156,7 @@ func (s *PhysicalScan) Execute(ctx context.Context) (*ExecutionResult, error) {
 		nil, // filterExpression (separate from query)
 		0,   // from
 		maxResults,
+		s.Sort,
 	)
 	if err != nil {
 		if execCtx.Logger != nil {
@@ -500,6 +502,31 @@ func (p *Planner) planAggregate(logical *LogicalAggregate) (PhysicalPlan, error)
 	}, nil
 }
 
+// sortFieldsToStrings converts SortField objects to proto-compatible strings.
+// Format: "field:asc" or "field:desc".
+func sortFieldsToStrings(fields []*SortField) []string {
+	result := make([]string, 0, len(fields))
+	for _, f := range fields {
+		dir := "asc"
+		if f.Descending {
+			dir = "desc"
+		}
+		result = append(result, f.Field+":"+dir)
+	}
+	return result
+}
+
+// setChildScanSort walks the physical plan tree and sets Sort on any PhysicalScan nodes.
+func setChildScanSort(plan PhysicalPlan, sort []string) {
+	if scan, ok := plan.(*PhysicalScan); ok {
+		scan.Sort = sort
+		return
+	}
+	for _, child := range plan.Children() {
+		setChildScanSort(child, sort)
+	}
+}
+
 // setChildScanMaxResults walks the physical plan tree and sets MaxResults
 // on any PhysicalScan nodes found.
 func setChildScanMaxResults(plan PhysicalPlan, maxResults int) {
@@ -531,8 +558,9 @@ func setChildScanAggregations(plan PhysicalPlan, aggs []*Aggregation) {
 func serializeAggregations(aggs []*Aggregation) map[string]interface{} {
 	result := make(map[string]interface{})
 	for _, agg := range aggs {
-		aggBody := map[string]interface{}{
-			"field": agg.Field,
+		aggBody := make(map[string]interface{})
+		if agg.Field != "" {
+			aggBody["field"] = agg.Field
 		}
 		for k, v := range agg.Params {
 			aggBody[k] = v
@@ -554,6 +582,10 @@ func (p *Planner) planSort(logical *LogicalSort) (PhysicalPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Push sort info to child scan so data node can optimize (e.g. reverse read for desc sort)
+	sortStrings := sortFieldsToStrings(logical.SortFields)
+	setChildScanSort(child, sortStrings)
 
 	cost := p.CostModel.EstimateSortCost(logical, child.Cost())
 	return &PhysicalSort{
@@ -585,6 +617,10 @@ func (p *Planner) planTopN(logical *LogicalTopN) (PhysicalPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Push sort info to child scan so data node can optimize (e.g. reverse read for desc sort)
+	sortStrings := sortFieldsToStrings(logical.SortFields)
+	setChildScanSort(child, sortStrings)
 
 	// TopN is more efficient than separate Sort + Limit for small N
 	// Cost is roughly: child cost + N * log(N) for heap maintenance

@@ -100,8 +100,9 @@ func (dc *DataNodeClient) IsConnected() bool {
 	return dc.connected
 }
 
-// Search executes a search query on a specific shard
-func (dc *DataNodeClient) Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte, maxResults int) (*pb.SearchResponse, error) {
+// Search executes a search query on a specific shard.
+// sort is optional; when non-nil, forwarded to data node for optimized retrieval.
+func (dc *DataNodeClient) Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte, maxResults int, sort []string) (*pb.SearchResponse, error) {
 	dc.mu.RLock()
 	if !dc.connected {
 		dc.mu.RUnlock()
@@ -118,6 +119,7 @@ func (dc *DataNodeClient) Search(ctx context.Context, indexName string, shardID 
 		Query:            query,
 		FilterExpression: filterExpression,
 		Size:             int32(maxResults),
+		Sort:             sort,
 	}
 
 	resp, err := client.Search(ctx, req)
@@ -274,6 +276,30 @@ func (dc *DataNodeClient) GetShardStats(ctx context.Context, indexName string, s
 	resp, err := client.GetShardStats(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("get shard stats failed on node %s shard %d: %w", dc.nodeID, shardID, err)
+	}
+
+	return resp, nil
+}
+
+// ForceMerge triggers segment merging on a specific shard
+func (dc *DataNodeClient) ForceMerge(ctx context.Context, indexName string, shardID int32, maxSegments int32) (*pb.ForceMergeResponse, error) {
+	dc.mu.RLock()
+	if !dc.connected {
+		dc.mu.RUnlock()
+		return nil, fmt.Errorf("not connected to data node %s", dc.nodeID)
+	}
+	client := dc.client
+	dc.mu.RUnlock()
+
+	req := &pb.ForceMergeRequest{
+		IndexName:   indexName,
+		ShardId:     shardID,
+		MaxSegments: maxSegments,
+	}
+
+	resp, err := client.ForceMerge(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("force merge failed on node %s shard %d: %w", dc.nodeID, shardID, err)
 	}
 
 	return resp, nil

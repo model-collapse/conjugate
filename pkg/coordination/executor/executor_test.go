@@ -18,7 +18,7 @@ type MockDataNodeClient struct {
 	nodeID string
 }
 
-func (m *MockDataNodeClient) Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte, maxResults int) (*pb.SearchResponse, error) {
+func (m *MockDataNodeClient) Search(ctx context.Context, indexName string, shardID int32, query []byte, filterExpression []byte, maxResults int, sort []string) (*pb.SearchResponse, error) {
 	args := m.Called(ctx, indexName, shardID, query, filterExpression, maxResults)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -148,7 +148,7 @@ func TestQueryExecutorSearchTwoShards(t *testing.T) {
 
 	// Execute search
 	query := []byte(`{"match_all": {}}`)
-	result, err := executor.ExecuteSearch(ctx, "test-index", query, nil, 0, 10)
+	result, err := executor.ExecuteSearch(ctx, "test-index", query, nil, 0, 10, nil)
 
 	// Verify results
 	require.NoError(t, err)
@@ -215,7 +215,7 @@ func TestQueryExecutorSearchWithPagination(t *testing.T) {
 	executor.RegisterDataNode(node1)
 
 	// Test pagination: from=10, size=5
-	result, err := executor.ExecuteSearch(ctx, "test-index", []byte(`{"match_all": {}}`), nil, 10, 5)
+	result, err := executor.ExecuteSearch(ctx, "test-index", []byte(`{"match_all": {}}`), nil, 10, 5, nil)
 
 	// Verify results
 	require.NoError(t, err)
@@ -288,7 +288,7 @@ func TestQueryExecutorPartialShardFailure(t *testing.T) {
 	executor.RegisterDataNode(node3)
 
 	// Execute search (should succeed with partial results)
-	result, err := executor.ExecuteSearch(ctx, "test-index", []byte(`{"match_all": {}}`), nil, 0, 10)
+	result, err := executor.ExecuteSearch(ctx, "test-index", []byte(`{"match_all": {}}`), nil, 0, 10, nil)
 
 	// Verify graceful degradation
 	require.NoError(t, err, "Search should succeed despite partial shard failure")
@@ -318,7 +318,7 @@ func TestQueryExecutorNoDataNodes(t *testing.T) {
 	executor := NewQueryExecutor(masterClient, logger)
 
 	// Execute search (should fail)
-	_, err := executor.ExecuteSearch(ctx, "test-index", []byte(`{"match_all": {}}`), nil, 0, 10)
+	_, err := executor.ExecuteSearch(ctx, "test-index", []byte(`{"match_all": {}}`), nil, 0, 10, nil)
 
 	// Verify error
 	assert.Error(t, err, "Search should fail with no data nodes")
@@ -343,7 +343,7 @@ func TestQueryExecutorMasterClientError(t *testing.T) {
 	executor := NewQueryExecutor(masterClient, logger)
 
 	// Execute search (should fail)
-	_, err := executor.ExecuteSearch(ctx, "test-index", []byte(`{"match_all": {}}`), nil, 0, 10)
+	_, err := executor.ExecuteSearch(ctx, "test-index", []byte(`{"match_all": {}}`), nil, 0, 10, nil)
 
 	// Verify error
 	assert.Error(t, err, "Search should fail when master is unavailable")

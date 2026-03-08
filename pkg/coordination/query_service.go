@@ -82,7 +82,7 @@ type QueryService struct {
 
 // queryExecutorInterface defines the methods needed from query executor
 type queryExecutorInterface interface {
-	ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int) (*executor.SearchResult, error)
+	ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int, sort []string) (*executor.SearchResult, error)
 }
 
 // masterClientInterface defines the methods needed from master client
@@ -246,6 +246,19 @@ func (qs *QueryService) ExecuteSearch(ctx context.Context, indexName string, req
 		queryPlanningTime.WithLabelValues(indexName, "query_pipeline").Observe(time.Since(queryPipelineStart).Seconds())
 	}
 
+	// Aggregation fast path: for size=0 + aggs, bypass planner and forward
+	// raw query JSON directly to data nodes. The data node has a native fast path
+	// for aggregations that computes results in <1ms using C++ hash maps.
+	if searchReq.Size == 0 && (len(searchReq.Aggregations) > 0 || len(searchReq.Aggs) > 0) {
+		result, err := qs.executeAggFastPath(ctx, indexName, requestBody, startTime)
+		if err == nil {
+			return result, nil
+		}
+		qs.logger.Warn("Agg fast path failed, falling back to planner",
+			zap.String("index", indexName),
+			zap.Error(err))
+	}
+
 	// Step 2: Get shard routing for this index
 	routing, err := qs.masterClient.GetShardRouting(ctx, indexName)
 	if err != nil {
@@ -403,6 +416,79 @@ func (qs *QueryService) ExecuteSearch(ctx context.Context, indexName string, req
 		zap.Duration("execute_time", executeTime))
 
 	return result, nil
+}
+
+// executeAggFastPath bypasses the planner and sends raw query JSON directly to
+// data nodes for aggregation queries (size=0). The executor fans out to all shards,
+// and each data node's native aggregation path computes results using C++ hash maps.
+func (qs *QueryService) executeAggFastPath(ctx context.Context, indexName string, rawQuery []byte, startTime time.Time) (*SearchResult, error) {
+	qs.logger.Debug("Agg fast path: bypassing planner for size=0 agg query",
+		zap.String("index", indexName))
+
+	// Use the existing executor fan-out — sends raw query bytes to all data nodes
+	// with size=0. Data node detects embedded aggs and uses native C++ fast path.
+	execResult, err := qs.queryExecutor.ExecuteSearch(ctx, indexName, rawQuery, nil, 0, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	totalTime := time.Since(startTime)
+	result := &SearchResult{
+		TookMillis:   totalTime.Milliseconds(),
+		TotalHits:    execResult.TotalHits,
+		MaxScore:     execResult.MaxScore,
+		Hits:         []*SearchHit{},
+		Aggregations: make(map[string]*AggregationResult),
+		Shards:       &ShardInfo{Total: 1, Successful: 1},
+	}
+
+	// Convert executor aggregations to coordination SearchResult aggregations
+	for name, agg := range execResult.Aggregations {
+		result.Aggregations[name] = convertExecutorAggregation(agg)
+	}
+
+	qs.logger.Info("Agg fast path succeeded",
+		zap.String("index", indexName),
+		zap.Int64("total_hits", execResult.TotalHits),
+		zap.Int("agg_results", len(result.Aggregations)),
+		zap.Duration("total_time", totalTime))
+
+	return result, nil
+}
+
+// convertExecutorAggregation converts executor.AggregationResult to coordination AggregationResult
+func convertExecutorAggregation(agg *executor.AggregationResult) *AggregationResult {
+	if agg == nil {
+		return &AggregationResult{}
+	}
+
+	result := &AggregationResult{
+		Type:    agg.Type,
+		Buckets: make([]*AggregationBucket, len(agg.Buckets)),
+		Value:   float64(agg.Value),
+		Count:   agg.Count,
+		Min:     agg.Min,
+		Max:     agg.Max,
+		Avg:     agg.Avg,
+		Sum:     agg.Sum,
+	}
+
+	for i, b := range agg.Buckets {
+		key := interface{}(b.Key)
+		if b.Key == "" && b.NumericKey != 0 {
+			key = b.NumericKey
+		}
+		result.Buckets[i] = &AggregationBucket{
+			Key:      key,
+			DocCount: b.DocCount,
+			SubAggs:  make(map[string]*AggregationResult),
+		}
+		for subName, subAgg := range b.SubAggs {
+			result.Buckets[i].SubAggs[subName] = convertExecutorAggregation(subAgg)
+		}
+	}
+
+	return result
 }
 
 // convertToSearchResult converts ExecutionResult to SearchResult

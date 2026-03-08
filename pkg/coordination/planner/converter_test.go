@@ -462,6 +462,9 @@ func TestConvertAllAggregationTypes(t *testing.T) {
 		{"percentiles_agg", "percentiles", "response_time", AggTypePercentiles},
 		{"histogram_agg", "histogram", "price", AggTypeHistogram},
 		{"date_histogram_agg", "date_histogram", "timestamp", AggTypeDateHistogram},
+		{"significant_terms_agg", "significant_terms", "text.keyword", AggTypeSignificantTerms},
+		{"auto_date_histogram_agg", "auto_date_histogram", "timestamp", AggTypeAutoDateHistogram},
+		{"value_count_agg", "value_count", "user_id", AggTypeCount},
 	}
 
 	for _, tt := range aggTypes {
@@ -487,6 +490,70 @@ func TestConvertAllAggregationTypes(t *testing.T) {
 			assert.Equal(t, tt.field, agg.Field)
 		})
 	}
+
+	// Test range agg (no single field in standard test above, has ranges param)
+	t.Run("range_agg", func(t *testing.T) {
+		body := map[string]interface{}{
+			"field": "bytes",
+			"ranges": []interface{}{
+				map[string]interface{}{"to": float64(1000)},
+				map[string]interface{}{"from": float64(1000), "to": float64(10000)},
+				map[string]interface{}{"from": float64(10000)},
+			},
+		}
+		agg, err := converter.convertAggregation("price_ranges", "range", body)
+		require.NoError(t, err)
+		assert.Equal(t, AggTypeRange, agg.Type)
+		assert.Equal(t, "bytes", agg.Field)
+		assert.NotNil(t, agg.Params["ranges"])
+	})
+
+	// Test composite agg (no single field, has sources)
+	t.Run("composite_agg", func(t *testing.T) {
+		body := map[string]interface{}{
+			"sources": []interface{}{
+				map[string]interface{}{
+					"date": map[string]interface{}{
+						"date_histogram": map[string]interface{}{
+							"field":             "@timestamp",
+							"calendar_interval": "1d",
+						},
+					},
+				},
+				map[string]interface{}{
+					"status": map[string]interface{}{
+						"terms": map[string]interface{}{
+							"field": "status.keyword",
+						},
+					},
+				},
+			},
+			"size": float64(100),
+		}
+		agg, err := converter.convertAggregation("my_composite", "composite", body)
+		require.NoError(t, err)
+		assert.Equal(t, AggTypeComposite, agg.Type)
+		assert.Empty(t, agg.Field) // No single field for composite
+		assert.NotNil(t, agg.Params["sources"])
+		assert.Equal(t, 100, agg.Params["size"])
+	})
+
+	// Test multi_terms agg (no single field, has terms array)
+	t.Run("multi_terms_agg", func(t *testing.T) {
+		body := map[string]interface{}{
+			"terms": []interface{}{
+				map[string]interface{}{"field": "status.keyword"},
+				map[string]interface{}{"field": "method.keyword"},
+			},
+			"size": float64(20),
+		}
+		agg, err := converter.convertAggregation("multi", "multi_terms", body)
+		require.NoError(t, err)
+		assert.Equal(t, AggTypeMultiTerms, agg.Type)
+		assert.Empty(t, agg.Field)
+		assert.NotNil(t, agg.Params["terms"])
+		assert.Equal(t, 20, agg.Params["size"])
+	})
 }
 
 func TestEstimateSelectivity(t *testing.T) {

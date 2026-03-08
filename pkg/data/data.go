@@ -314,7 +314,7 @@ func (d *DataNode) SearchShard(ctx context.Context, indexName string, shardID in
 		return nil, err
 	}
 
-	return shard.Search(ctx, query, 100) // Default limit for direct calls
+	return shard.Search(ctx, query, 100, nil) // Default limit for direct calls
 }
 
 // NodeStats represents node statistics

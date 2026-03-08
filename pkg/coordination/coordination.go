@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -264,6 +265,7 @@ func (c *CoordinationNode) setupRoutes() {
 	c.ginRouter.POST("/:index/_close", c.handleCloseIndex)
 	c.ginRouter.POST("/:index/_refresh", c.handleRefreshIndex)
 	c.ginRouter.POST("/:index/_flush", c.handleFlushIndex)
+	c.ginRouter.POST("/:index/_forcemerge", c.handleForceMerge)
 
 	// Mapping APIs
 	c.ginRouter.GET("/:index/_mapping", c.handleGetMapping)
@@ -662,6 +664,47 @@ func (c *CoordinationNode) handleRefreshIndex(ctx *gin.Context) {
 
 func (c *CoordinationNode) handleFlushIndex(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"_shards": gin.H{"total": 1, "successful": 1, "failed": 0}})
+}
+
+func (c *CoordinationNode) handleForceMerge(ctx *gin.Context) {
+	indexName := ctx.Param("index")
+	maxSegments := int32(1)
+	if ms := ctx.Query("max_num_segments"); ms != "" {
+		if v, err := strconv.ParseInt(ms, 10, 32); err == nil && v > 0 {
+			maxSegments = int32(v)
+		}
+	}
+
+	c.logger.Info("Force merge requested", zap.String("index", indexName), zap.Int32("max_segments", maxSegments))
+
+	// Find data node with this shard
+	c.dataClientsMu.RLock()
+	var client *DataNodeClient
+	for _, dc := range c.dataClients {
+		if dc.IsConnected() {
+			client = dc
+			break
+		}
+	}
+	c.dataClientsMu.RUnlock()
+
+	if client == nil {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "no data nodes available"})
+		return
+	}
+
+	resp, err := client.ForceMerge(ctx.Request.Context(), indexName, 0, maxSegments)
+	if err != nil {
+		c.logger.Error("Force merge failed", zap.Error(err))
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"_shards":      gin.H{"total": 1, "successful": 1, "failed": 0},
+		"acknowledged": resp.Acknowledged,
+		"duration_ms":  resp.DurationMillis,
+	})
 }
 
 func (c *CoordinationNode) handleGetMapping(ctx *gin.Context) {
@@ -1448,7 +1491,8 @@ func (c *CoordinationNode) convertAggregationToResponse(agg *AggregationResult) 
 	result := gin.H{}
 
 	switch agg.Type {
-	case "terms", "histogram", "date_histogram":
+	case "terms", "histogram", "date_histogram", "range", "filters",
+		"auto_date_histogram", "significant_terms", "multi_terms", "composite":
 		// Bucket aggregations
 		buckets := make([]gin.H, 0, len(agg.Buckets))
 		for _, bucket := range agg.Buckets {

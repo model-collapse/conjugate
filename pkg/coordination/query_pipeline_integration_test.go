@@ -22,7 +22,7 @@ type mockPipelineQueryExecutor struct {
 	executeFunc func(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int) (*executor.SearchResult, error)
 }
 
-func (m *mockPipelineQueryExecutor) ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int) (*executor.SearchResult, error) {
+func (m *mockPipelineQueryExecutor) ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int, sort []string) (*executor.SearchResult, error) {
 	if m.executeFunc != nil {
 		return m.executeFunc(ctx, indexName, query, filterExpr, from, size)
 	}

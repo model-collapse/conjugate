@@ -38,7 +38,7 @@ type Optimizer struct {
 // NewOptimizer creates a new optimizer with default rules
 func NewOptimizer() *Optimizer {
 	return &Optimizer{
-		RuleSet:   NewRuleSet(),
+		RuleSet:   NewRuleSet(GetDefaultRules()...),
 		MaxPasses: 10,
 		CostBased: true,
 	}

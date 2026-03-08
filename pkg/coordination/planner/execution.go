@@ -12,7 +12,7 @@ import (
 
 // QueryExecutorInterface defines the interface for query execution
 type QueryExecutorInterface interface {
-	ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int) (*executor.SearchResult, error)
+	ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int, sort []string) (*executor.SearchResult, error)
 }
 
 // ExecutionContext provides the execution environment for physical plans

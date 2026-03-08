@@ -124,7 +124,8 @@ func (qe *QueryExecutor) mergeAggregations(responses []*pb.SearchResponse) map[s
 		var result *AggregationResult
 
 		switch aggType {
-		case "terms", "histogram", "date_histogram", "range", "filters":
+		case "terms", "histogram", "date_histogram", "range", "filters",
+			"auto_date_histogram", "significant_terms", "multi_terms", "composite":
 			result = qe.mergeBucketAggregation(aggs)
 		case "stats":
 			result = qe.mergeStatsAggregation(aggs, false)
@@ -235,12 +236,13 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 			}
 			buckets = append(buckets, bucket)
 		}
-		// Sort by doc_count descending for terms, by key for date_histogram
-		if aggType == "date_histogram" {
+		// Sort by key for date-based and composite aggs, by doc_count for others
+		switch aggType {
+		case "date_histogram", "auto_date_histogram", "composite":
 			sort.Slice(buckets, func(i, j int) bool {
 				return buckets[i].Key < buckets[j].Key
 			})
-		} else {
+		default: // terms, significant_terms, multi_terms, etc.
 			sort.Slice(buckets, func(i, j int) bool {
 				return buckets[i].DocCount > buckets[j].DocCount
 			})

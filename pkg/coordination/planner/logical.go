@@ -143,8 +143,13 @@ const (
 	AggTypeHistogram      AggregationType = "histogram"
 	AggTypeDateHistogram  AggregationType = "date_histogram"
 	AggTypePercentiles    AggregationType = "percentiles"
-	AggTypeCardinality    AggregationType = "cardinality"
-	AggTypeExtendedStats  AggregationType = "extended_stats"
+	AggTypeCardinality        AggregationType = "cardinality"
+	AggTypeExtendedStats      AggregationType = "extended_stats"
+	AggTypeRange              AggregationType = "range"
+	AggTypeAutoDateHistogram  AggregationType = "auto_date_histogram"
+	AggTypeComposite          AggregationType = "composite"
+	AggTypeSignificantTerms   AggregationType = "significant_terms"
+	AggTypeMultiTerms         AggregationType = "multi_terms"
 )
 
 // Aggregation represents an aggregation operation

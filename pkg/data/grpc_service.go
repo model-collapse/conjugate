@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	json "github.com/goccy/go-json"
+	"strings"
 	"sync"
 	"time"
 
@@ -495,19 +497,47 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 
 	// Standard path: search + extract docs (for non-agg queries or unsupported agg types)
 	if result == nil {
+		// Check if query is match_all (for direct doc scan optimization)
+		isMatchAll := false
+		if q, ok := wrappedQuery["query"]; ok {
+			if qMap, ok := q.(map[string]interface{}); ok {
+				_, isMatchAll = qMap["match_all"]
+			}
+		} else {
+			// No explicit query means match_all
+			isMatchAll = true
+		}
+
 		if len(aggsMap) > 0 && maxResults > 100 {
-			// Aggregation path: use lightweight SearchAndAggregate (no Hit object allocation)
 			aggFields := extractAggregationFields(aggsMap)
-			totalHits, aggDocs, searchErr := shard.DiagonShard.SearchAndAggregate(queryBytes, maxResults, aggFields)
-			if searchErr != nil {
-				s.logger.Error("SearchAndAggregate failed", zap.Error(searchErr))
-				return nil, status.Errorf(codes.Internal, "search failed: %v", searchErr)
-			}
-			result = &diagon.SearchResult{
-				TotalHits: totalHits,
-			}
-			if len(aggDocs) > 0 {
-				aggregations = computeAggregationsFromDocValues(aggDocs, aggsMap)
+
+			if isMatchAll {
+				// match_all + aggs: use DirectAggScan to avoid O(totalDocs) diagon_search.
+				// Scans first maxResults docs by doc ID: O(maxResults) instead of O(totalDocs).
+				totalHits, aggDocs, scanErr := shard.DiagonShard.DirectAggScan(aggFields, maxResults)
+				if scanErr != nil {
+					s.logger.Error("DirectAggScan failed", zap.Error(scanErr))
+					return nil, status.Errorf(codes.Internal, "direct agg scan failed: %v", scanErr)
+				}
+				result = &diagon.SearchResult{
+					TotalHits: totalHits,
+				}
+				if len(aggDocs) > 0 {
+					aggregations = computeAggregationsFromDocValues(aggDocs, aggsMap)
+				}
+			} else {
+				// Filtered agg query: need diagon_search to apply filter
+				totalHits, aggDocs, searchErr := shard.DiagonShard.SearchAndAggregate(queryBytes, maxResults, aggFields)
+				if searchErr != nil {
+					s.logger.Error("SearchAndAggregate failed", zap.Error(searchErr))
+					return nil, status.Errorf(codes.Internal, "search failed: %v", searchErr)
+				}
+				result = &diagon.SearchResult{
+					TotalHits: totalHits,
+				}
+				if len(aggDocs) > 0 {
+					aggregations = computeAggregationsFromDocValues(aggDocs, aggsMap)
+				}
 			}
 		} else if len(aggsMap) > 0 {
 			aggFields := extractAggregationFields(aggsMap)
@@ -520,10 +550,48 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 				aggregations = computeDataNodeAggregations(result.Hits, aggsMap)
 			}
 		} else {
-			result, err = shard.Search(ctx, queryBytes, maxResults)
-			if err != nil {
-				s.logger.Error("Search failed", zap.Error(err))
-				return nil, status.Errorf(codes.Internal, "search failed: %v", err)
+			// Optimization: for bool queries with range + non-range clauses,
+			// execute the non-range part via Diagon (fast inverted index) and
+			// post-filter by range in Go. Avoids O(N) doc values scan when
+			// the non-range clause is selective.
+			var queryMap map[string]interface{}
+			_ = json.Unmarshal(queryBytes, &queryMap)
+			if queryMap != nil {
+				rf, modifiedQuery := extractRangeFromBool(queryMap)
+				if rf != nil && modifiedQuery != nil {
+					// Execute non-range query via Diagon
+					// Request more results to account for post-filter reduction.
+					// Larger expandedMax covers more selective range filters at the
+					// cost of slightly more doc extraction (7µs/doc). The Diagon
+					// search itself always scores ALL matching docs regardless of
+					// limit, so the marginal cost is only in extraction.
+					expandedMax := maxResults * 20
+					if expandedMax < 1000 {
+						expandedMax = 1000
+					}
+					result, err = shard.Search(ctx, modifiedQuery, expandedMax, req.Sort)
+					if err != nil {
+						s.logger.Error("Search failed (range-split)", zap.Error(err))
+						return nil, status.Errorf(codes.Internal, "search failed: %v", err)
+					}
+					// Post-filter hits by range bounds in Go
+					if len(result.Hits) > 0 {
+						result.Hits = postFilterByRange(result.Hits, rf)
+						result.TotalHits = int64(len(result.Hits))
+					}
+					// Trim to requested size
+					if len(result.Hits) > maxResults {
+						result.Hits = result.Hits[:maxResults]
+					}
+				}
+			}
+			// Fall through to standard search if range-split didn't apply
+			if result == nil {
+				result, err = shard.Search(ctx, queryBytes, maxResults, req.Sort)
+				if err != nil {
+					s.logger.Error("Search failed", zap.Error(err))
+					return nil, status.Errorf(codes.Internal, "search failed: %v", err)
+				}
 			}
 		}
 	}
@@ -855,31 +923,36 @@ func convertBuckets(buckets []map[string]interface{}) []*pb.AggregationBucket {
 }
 
 // ForceMerge optimizes a shard by merging segments.
-// DISABLED: Diagon's SegmentMerger::merge() is a stub that creates empty merged
-// segments (no data files), then deletes the originals. This destroys all index data.
-// Re-enable once upstream Diagon implements SegmentMerger properly.
 func (s *DataService) ForceMerge(ctx context.Context, req *pb.ForceMergeRequest) (*pb.ForceMergeResponse, error) {
-	s.logger.Warn("ForceMerge SKIPPED: Diagon SegmentMerger is a stub that destroys data",
+	s.logger.Info("ForceMerge requested",
 		zap.String("index", req.IndexName),
 		zap.Int32("shard_id", req.ShardId),
 		zap.Int32("max_segments", req.MaxSegments))
 
-	// Flush pending docs to make them searchable (this is safe)
-	if req.IndexName != "" {
-		shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
-		if err == nil {
-			if flushErr := shard.Flush(ctx); flushErr != nil {
-				s.logger.Warn("Flush during force merge failed", zap.Error(flushErr))
-			}
-		}
+	shard, err := s.node.shards.GetShard(req.IndexName, req.ShardId)
+	if err != nil {
+		return nil, fmt.Errorf("shard not found: %w", err)
 	}
 
-	// Return success without actually merging
+	maxSegs := int(req.MaxSegments)
+	if maxSegs <= 0 {
+		maxSegs = 1
+	}
+
+	startTime := time.Now()
+	if err := shard.ForceMerge(maxSegs); err != nil {
+		s.logger.Error("ForceMerge failed", zap.Error(err))
+		return nil, fmt.Errorf("force merge failed: %w", err)
+	}
+	duration := time.Since(startTime)
+
+	s.logger.Info("ForceMerge completed",
+		zap.String("index", req.IndexName),
+		zap.Duration("duration", duration))
+
 	return &pb.ForceMergeResponse{
 		Acknowledged:   true,
-		SegmentsBefore: 0,
-		SegmentsAfter:  0,
-		DurationMillis: 0,
+		DurationMillis: int64(duration.Milliseconds()),
 	}, nil
 }
 
@@ -935,6 +1008,21 @@ func computeNativeAggregations(diagonShard *diagon.Shard, aggsMap map[string]int
 					Buckets: pbBuckets,
 				}
 
+			case "cardinality":
+				field, _ := bodyMap["field"].(string)
+				cardinality, err := diagonShard.ComputeCardinality(field)
+				if err != nil {
+					logger.Debug("Native cardinality failed",
+						zap.String("name", name),
+						zap.String("field", field),
+						zap.Error(err))
+					return nil
+				}
+				results[name] = &pb.AggregationResult{
+					Type:  "cardinality",
+					Value: cardinality,
+				}
+
 			case "date_histogram":
 				return nil // Not supported natively, fall back to doc extraction
 
@@ -983,6 +1071,283 @@ func extractFieldsRecursive(aggsMap map[string]interface{}, fieldSet map[string]
 			if field, ok := bodyMap["field"].(string); ok {
 				fieldSet[field] = true
 			}
+			// composite: extract fields from sources array
+			if aggType == "composite" {
+				if sources, ok := bodyMap["sources"].([]interface{}); ok {
+					for _, src := range sources {
+						if srcMap, ok := src.(map[string]interface{}); ok {
+							for _, def := range srcMap {
+								if defMap, ok := def.(map[string]interface{}); ok {
+									for _, innerBody := range defMap {
+										if innerBodyMap, ok := innerBody.(map[string]interface{}); ok {
+											if f, ok := innerBodyMap["field"].(string); ok {
+												fieldSet[f] = true
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			// multi_terms: extract fields from terms array
+			if aggType == "multi_terms" {
+				if terms, ok := bodyMap["terms"].([]interface{}); ok {
+					for _, t := range terms {
+						if tm, ok := t.(map[string]interface{}); ok {
+							if f, ok := tm["field"].(string); ok {
+								fieldSet[f] = true
+							}
+						}
+					}
+				}
+			}
 		}
 	}
+}
+
+// rangeFilter holds parsed range parameters for Go-side post-filtering.
+type rangeFilter struct {
+	Field        string
+	LowerMs      float64 // epoch ms for dates, raw value for numerics
+	UpperMs      float64
+	IncludeLower bool
+	IncludeUpper bool
+}
+
+// extractRangeFromBool detects bool queries that combine range + non-range clauses.
+// Returns the range filter parameters and a modified query with the range clause removed.
+// Returns nil rangeFilter if the query is not a compound bool with range.
+func extractRangeFromBool(queryObj map[string]interface{}) (*rangeFilter, []byte) {
+	boolQ, ok := queryObj["bool"].(map[string]interface{})
+	if !ok {
+		return nil, nil
+	}
+
+	// Look for range clauses in "must" and "filter"
+	for _, clauseKey := range []string{"must", "filter"} {
+		clauses, ok := boolQ[clauseKey].([]interface{})
+		if !ok {
+			continue
+		}
+
+		var rangeIdx int = -1
+		var rf *rangeFilter
+
+		for i, clause := range clauses {
+			clauseMap, ok := clause.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			rangeClause, ok := clauseMap["range"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			// Found a range clause — parse it
+			for field, params := range rangeClause {
+				paramsMap, ok := params.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				rf = &rangeFilter{
+					Field:        field,
+					LowerMs:      -9007199254740992,
+					UpperMs:      9007199254740992,
+					IncludeLower: true,
+					IncludeUpper: true,
+				}
+				// Parse bounds
+				if v, ok := parseRangeBound(paramsMap, "gte"); ok {
+					rf.LowerMs = v
+					rf.IncludeLower = true
+				}
+				if v, ok := parseRangeBound(paramsMap, "gt"); ok {
+					rf.LowerMs = v
+					rf.IncludeLower = false
+				}
+				if v, ok := parseRangeBound(paramsMap, "lte"); ok {
+					rf.UpperMs = v
+					rf.IncludeUpper = true
+				}
+				if v, ok := parseRangeBound(paramsMap, "lt"); ok {
+					rf.UpperMs = v
+					rf.IncludeUpper = false
+				}
+				rangeIdx = i
+				break
+			}
+			if rf != nil {
+				break
+			}
+		}
+
+		if rf == nil || rangeIdx < 0 {
+			continue
+		}
+
+		// Remove range clause from this key
+		remaining := make([]interface{}, 0, len(clauses)-1)
+		for i, c := range clauses {
+			if i != rangeIdx {
+				remaining = append(remaining, c)
+			}
+		}
+
+		// Build modified bool query without the range clause
+		newBool := make(map[string]interface{})
+		for k, v := range boolQ {
+			if k == clauseKey {
+				if len(remaining) > 0 {
+					newBool[k] = remaining
+				}
+				// If remaining is empty, omit the key entirely
+			} else {
+				newBool[k] = v
+			}
+		}
+
+		// Check if there are any non-range clauses left in the entire bool
+		hasNonRangeClauses := false
+		for k, v := range newBool {
+			if arr, ok := v.([]interface{}); ok && len(arr) > 0 {
+				hasNonRangeClauses = true
+				break
+			}
+			// Non-array bool keys (e.g. minimum_should_match) don't count
+			_ = k
+		}
+		if !hasNonRangeClauses {
+			// Pure range query — can't optimize, let Diagon handle it
+			return nil, nil
+		}
+
+		// Simplify if possible: {"bool": {"must": [X]}} → X
+		if len(newBool) == 1 {
+			for k, v := range newBool {
+				if arr, ok := v.([]interface{}); ok && len(arr) == 1 && (k == "must" || k == "filter") {
+					modifiedBytes, err := json.Marshal(arr[0])
+					if err == nil {
+						return rf, modifiedBytes
+					}
+				}
+			}
+		}
+
+		modifiedQuery := map[string]interface{}{"bool": newBool}
+		modifiedBytes, err := json.Marshal(modifiedQuery)
+		if err != nil {
+			return nil, nil
+		}
+		return rf, modifiedBytes
+	}
+
+	return nil, nil
+}
+
+// parseRangeBound parses a range bound value (float64, date string, or "now" expression).
+func parseRangeBound(params map[string]interface{}, key string) (float64, bool) {
+	v, ok := params[key]
+	if !ok {
+		return 0, false
+	}
+	switch val := v.(type) {
+	case float64:
+		return val, true
+	case string:
+		if epochMs, ok := parseDateStringToEpochMs(val); ok {
+			return float64(epochMs), true
+		}
+	}
+	return 0, false
+}
+
+// parseDateStringToEpochMs parses ISO 8601 dates and "now" expressions to epoch milliseconds.
+func parseDateStringToEpochMs(s string) (int64, bool) {
+	if strings.HasPrefix(s, "now") {
+		return time.Now().UnixMilli(), true
+	}
+	layouts := []string{
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UnixMilli(), true
+		}
+	}
+	return 0, false
+}
+
+// postFilterByRange filters search hits by range bounds using document _source fields.
+func postFilterByRange(hits []*diagon.Hit, rf *rangeFilter) []*diagon.Hit {
+	if rf == nil || len(hits) == 0 {
+		return hits
+	}
+
+	filtered := make([]*diagon.Hit, 0, len(hits))
+	parts := strings.Split(rf.Field, ".")
+
+	for _, hit := range hits {
+		if hit.Source == nil {
+			continue
+		}
+
+		// Navigate nested path to get field value
+		val := getNestedField(hit.Source, parts)
+		if val == nil {
+			continue
+		}
+
+		var numVal float64
+		switch v := val.(type) {
+		case float64:
+			numVal = v
+		case string:
+			if epochMs, ok := parseDateStringToEpochMs(v); ok {
+				numVal = float64(epochMs)
+			} else {
+				continue
+			}
+		default:
+			continue
+		}
+
+		// Check range bounds
+		if rf.IncludeLower {
+			if numVal < rf.LowerMs {
+				continue
+			}
+		} else {
+			if numVal <= rf.LowerMs {
+				continue
+			}
+		}
+		if rf.IncludeUpper {
+			if numVal > rf.UpperMs {
+				continue
+			}
+		} else {
+			if numVal >= rf.UpperMs {
+				continue
+			}
+		}
+		filtered = append(filtered, hit)
+	}
+	return filtered
+}
+
+// getNestedField navigates a nested map to extract a field value by dotted path parts.
+func getNestedField(m map[string]interface{}, parts []string) interface{} {
+	current := interface{}(m)
+	for _, p := range parts {
+		mp, ok := current.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		current = mp[p]
+	}
+	return current
 }

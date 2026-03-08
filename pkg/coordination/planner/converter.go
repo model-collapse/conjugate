@@ -448,6 +448,71 @@ func (c *Converter) convertAggregation(name, aggType string, body interface{}) (
 			agg.Params["fixed_interval"] = fixedInterval
 		}
 
+	case "range":
+		agg.Type = AggTypeRange
+		if ranges, ok := bodyMap["ranges"].([]interface{}); ok {
+			agg.Params["ranges"] = ranges
+		}
+		if keyed, ok := bodyMap["keyed"].(bool); ok {
+			agg.Params["keyed"] = keyed
+		}
+
+	case "auto_date_histogram":
+		agg.Type = AggTypeAutoDateHistogram
+		if buckets, ok := bodyMap["buckets"].(float64); ok {
+			agg.Params["buckets"] = int(buckets)
+		} else {
+			agg.Params["buckets"] = 10 // Default
+		}
+		if format, ok := bodyMap["format"].(string); ok {
+			agg.Params["format"] = format
+		}
+		if timeZone, ok := bodyMap["time_zone"].(string); ok {
+			agg.Params["time_zone"] = timeZone
+		}
+		if minimumInterval, ok := bodyMap["minimum_interval"].(string); ok {
+			agg.Params["minimum_interval"] = minimumInterval
+		}
+
+	case "composite":
+		agg.Type = AggTypeComposite
+		agg.Field = "" // Composite has no single field
+		if sources, ok := bodyMap["sources"].([]interface{}); ok {
+			agg.Params["sources"] = sources
+		}
+		if size, ok := bodyMap["size"].(float64); ok {
+			agg.Params["size"] = int(size)
+		}
+		if after, ok := bodyMap["after"].(map[string]interface{}); ok {
+			agg.Params["after"] = after
+		}
+
+	case "significant_terms":
+		agg.Type = AggTypeSignificantTerms
+		if size, ok := bodyMap["size"].(float64); ok {
+			agg.Params["size"] = int(size)
+		} else {
+			agg.Params["size"] = 10 // Default
+		}
+		if minDocCount, ok := bodyMap["min_doc_count"].(float64); ok {
+			agg.Params["min_doc_count"] = int(minDocCount)
+		}
+
+	case "multi_terms":
+		agg.Type = AggTypeMultiTerms
+		agg.Field = "" // Multi-terms has no single field
+		if terms, ok := bodyMap["terms"].([]interface{}); ok {
+			agg.Params["terms"] = terms
+		}
+		if size, ok := bodyMap["size"].(float64); ok {
+			agg.Params["size"] = int(size)
+		} else {
+			agg.Params["size"] = 10 // Default
+		}
+
+	case "value_count":
+		agg.Type = AggTypeCount
+
 	default:
 		return nil, fmt.Errorf("unsupported aggregation type: %s", aggType)
 	}

@@ -15,7 +15,7 @@ type mockQueryExecutor struct {
 	searchFunc func(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int) (*executor.SearchResult, error)
 }
 
-func (m *mockQueryExecutor) ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int) (*executor.SearchResult, error) {
+func (m *mockQueryExecutor) ExecuteSearch(ctx context.Context, indexName string, query []byte, filterExpr []byte, from, size int, sort []string) (*executor.SearchResult, error) {
 	if m.searchFunc != nil {
 		return m.searchFunc(ctx, indexName, query, filterExpr, from, size)
 	}

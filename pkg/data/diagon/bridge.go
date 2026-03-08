@@ -13,19 +13,22 @@ typedef struct {
     int doc_count;
 } TermBucketC;
 
-// compute_terms_agg_stored iterates ALL documents in the reader (0..maxDoc-1),
-// reads a single stored field, and computes terms aggregation entirely in C.
-// This avoids going through TopDocs / search results.
+// compute_terms_agg_stored iterates documents in the reader, reads a single
+// stored field, and computes terms aggregation entirely in C.
+// max_docs_to_scan caps how many documents are scanned (0 = all).
 // Returns number of unique terms found. Results written to out_buckets (sorted by doc_count desc).
-// max_buckets limits the output size.
 static int compute_terms_agg_stored(
     DiagonIndexReader reader,
     const char* field_name,
     TermBucketC* out_buckets,
-    int max_buckets)
+    int max_buckets,
+    int max_docs_to_scan)
 {
     int max_doc = (int)diagon_reader_max_doc(reader);
     if (max_doc <= 0) return 0;
+    if (max_docs_to_scan > 0 && max_docs_to_scan < max_doc) {
+        max_doc = max_docs_to_scan;
+    }
 
     // Simple hash map: use linear probing with 4x overallocation
     // Max unique terms we track
@@ -115,6 +118,92 @@ static int compute_terms_agg_stored(
     free(all);
 
     return n;
+}
+
+// compute_cardinality_sampled counts approximate unique values for a field
+// by sampling uniformly-spaced documents. Uses a hash set with early termination:
+// stops sampling when no new unique values found in last `patience` docs.
+// sample_size controls max docs to read (stride = maxDoc / sample_size).
+// Returns estimated cardinality.
+static int64_t compute_cardinality_sampled(
+    DiagonIndexReader reader,
+    const char* field_name,
+    int sample_size)
+{
+    int max_doc = (int)diagon_reader_max_doc(reader);
+    if (max_doc <= 0) return 0;
+
+    int stride = max_doc / sample_size;
+    if (stride < 1) stride = 1;
+    int is_full_scan = (stride == 1);
+
+    // Hash set for unique counting (8K entries, ~260KB)
+    int map_cap = 8192;
+    typedef struct { char key[256]; int used; } Entry;
+    Entry* map = (Entry*)calloc(map_cap, sizeof(Entry));
+    if (!map) return 0;
+
+    int unique_count = 0;
+    int sampled = 0;
+    int since_last_new = 0; // early termination counter
+    int patience = 200;     // stop if 200 consecutive samples yield no new value
+    char tmp[4096];
+
+    for (int doc_id = 0; doc_id < max_doc; doc_id += stride) {
+        DiagonDocument doc = diagon_reader_get_document(reader, doc_id);
+        if (!doc) continue;
+        sampled++;
+
+        int is_new = 0;
+        if (diagon_document_get_field_value(doc, field_name, tmp, sizeof(tmp))) {
+            unsigned int hash = 5381;
+            for (const char* p = tmp; *p; p++) {
+                hash = ((hash << 5) + hash) + (unsigned char)*p;
+            }
+            int idx = hash % map_cap;
+
+            for (int probe = 0; probe < 512; probe++) {
+                int slot = (idx + probe) % map_cap;
+                if (!map[slot].used) {
+                    strncpy(map[slot].key, tmp, 255);
+                    map[slot].key[255] = '\0';
+                    map[slot].used = 1;
+                    unique_count++;
+                    is_new = 1;
+                    break;
+                }
+                if (strcmp(map[slot].key, tmp) == 0) {
+                    break;
+                }
+            }
+        }
+        diagon_free_document(doc);
+
+        if (is_new) {
+            since_last_new = 0;
+        } else {
+            since_last_new++;
+            // Early termination: if no new values in `patience` samples,
+            // we've likely seen all unique values (low/medium cardinality).
+            if (!is_full_scan && since_last_new >= patience) {
+                break;
+            }
+        }
+    }
+    free(map);
+
+    if (is_full_scan || unique_count == 0) {
+        return (int64_t)unique_count;
+    }
+
+    // For sampled data: if unique_count < 0.5 * sampled, we likely found most
+    // unique values (low cardinality). Return exact count.
+    if (unique_count < sampled / 2) {
+        return (int64_t)unique_count;
+    }
+    // High cardinality estimate: scale by sampling ratio
+    int64_t estimated = (int64_t)unique_count * max_doc / sampled;
+    return estimated;
 }
 
 // batch_extract_field_values extracts a single stored field value from ALL documents
@@ -208,6 +297,47 @@ static int batch_extract_two_fields(
     return num_results;
 }
 
+// batch_scan_field_values scans sequential doc IDs [0, max_docs) and extracts
+// a single stored field value from each document. Unlike batch_extract_field_values
+// which uses TopDocs from a search, this iterates doc IDs directly — ideal for
+// match_all aggregation queries that don't need search scoring.
+// Output: values concatenated in out_buf with null separators, lengths in out_lengths.
+// Returns number of valid documents scanned (skipping deleted docs).
+static int batch_scan_field_values(
+    DiagonIndexReader reader,
+    const char* field_name,
+    char* out_buf,
+    int buf_size,
+    int* out_lengths,
+    int max_docs)
+{
+    int max_doc_id = (int)diagon_reader_max_doc(reader);
+    if (max_doc_id <= 0) return 0;
+
+    int offset = 0;
+    char tmp[4096];
+    int valid_docs = 0;
+
+    for (int doc_id = 0; doc_id < max_doc_id && valid_docs < max_docs; doc_id++) {
+        DiagonDocument doc = diagon_reader_get_document(reader, doc_id);
+        if (!doc) continue;
+
+        out_lengths[valid_docs] = 0;
+        if (diagon_document_get_field_value(doc, field_name, tmp, sizeof(tmp))) {
+            int len = (int)strlen(tmp);
+            if (offset + len + 1 <= buf_size) {
+                memcpy(out_buf + offset, tmp, len + 1);
+                out_lengths[valid_docs] = len;
+                offset += len + 1;
+            }
+        }
+        diagon_free_document(doc);
+        valid_docs++;
+    }
+
+    return valid_docs;
+}
+
 // CStringArena: memory arena for batched CString allocations.
 // Reduces malloc/free overhead from ~80,000 calls to 1 per 5K-doc batch.
 typedef struct {
@@ -243,6 +373,7 @@ import "C"
 
 import (
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -254,6 +385,15 @@ import (
 
 	"go.uber.org/zap"
 )
+
+// countCFSFiles counts compound segment files (.cfs) in a directory.
+func countCFSFiles(dir string) int {
+	// Segments exist as either compound (.cfs) or non-compound (separate .tim files).
+	// Total segment count = compound + non-compound.
+	cfsMatches, _ := filepath.Glob(filepath.Join(dir, "*.cfs"))
+	timMatches, _ := filepath.Glob(filepath.Join(dir, "*.tim"))
+	return len(cfsMatches) + len(timMatches)
+}
 
 // tryParseDateToEpochMs attempts to parse a string as an ISO date and returns epoch millis.
 // Returns (epochMs, true) if successful, (0, false) otherwise.
@@ -503,6 +643,13 @@ type Shard struct {
 	// Invalidated when reader is reopened (readerDirty).
 	termsAggCache   map[string][]TermBucket
 	termsAggCacheMu sync.RWMutex
+	// columnCache stores extracted field values as Go string slices.
+	// After the first batch extraction, subsequent agg queries on the same
+	// fields skip CGO entirely and operate on pure Go arrays.
+	// Invalidated on commit/refresh (readerDirty).
+	columnCache   map[string][]string // field -> values for docs 0..N
+	columnCacheMu sync.RWMutex
+	columnCacheN  int // number of docs in cache (all columns same length)
 }
 
 // isKeywordLike returns true if a string value looks like a keyword (enum/identifier)
@@ -1108,6 +1255,33 @@ func (s *Shard) Refresh() error {
 	return nil
 }
 
+// WarmReader proactively opens the index reader without committing.
+// Call this at startup to avoid the cold-start penalty on the first search.
+func (s *Shard) WarmReader() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.reader != nil {
+		return nil // Already open
+	}
+
+	s.reader = C.diagon_open_index_reader(s.directory)
+	if s.reader == nil {
+		errMsg := C.GoString(C.diagon_last_error())
+		return fmt.Errorf("failed to open reader: %s", errMsg)
+	}
+
+	s.searcher = C.diagon_create_index_searcher(s.reader)
+	if s.searcher == nil {
+		errMsg := C.GoString(C.diagon_last_error())
+		return fmt.Errorf("failed to create searcher: %s", errMsg)
+	}
+
+	numDocs := int(C.diagon_reader_num_docs(s.reader))
+	s.logger.Info("Reader warmed", zap.Int("num_docs", numDocs))
+	return nil
+}
+
 // convertQueryToDiagon converts a query object to a Diagon query
 // This is a helper function used by Search and for recursive bool query parsing
 // Caller is responsible for freeing the returned query
@@ -1455,67 +1629,278 @@ func (s *Shard) Search(query []byte, filterExpression []byte) (*SearchResult, er
 // SearchFieldsOnly executes a search extracting only specific stored fields (no _source parsing).
 // Much faster for aggregation queries that only need a few field values per document.
 func (s *Shard) SearchFieldsOnly(query []byte, filterExpression []byte, maxResults int, fields []string) (*SearchResult, error) {
-	return s.searchInternal(query, filterExpression, maxResults, fields)
+	return s.searchInternal(query, filterExpression, maxResults, fields, nil)
 }
 
 // SearchWithLimit executes a search with a specified maximum number of results.
 // For non-aggregation queries, use a small limit (e.g., from+size).
 // For aggregation queries that need all matching docs, use a large limit.
 func (s *Shard) SearchWithLimit(query []byte, filterExpression []byte, maxResults int) (*SearchResult, error) {
-	return s.searchInternal(query, filterExpression, maxResults, nil)
+	return s.searchInternal(query, filterExpression, maxResults, nil, nil)
 }
 
-func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults int, fieldsOnly []string) (*SearchResult, error) {
+// SearchWithSort executes a search with sort push-down.
+// sort entries are "field:asc" or "field:desc". For match_all queries with desc sort
+// on a time field, reads docs from the back of the index (newest docs have highest
+// internal doc IDs in chronologically-indexed data).
+func (s *Shard) SearchWithSort(query []byte, filterExpression []byte, maxResults int, sort []string) (*SearchResult, error) {
+	return s.searchInternal(query, filterExpression, maxResults, nil, sort)
+}
+
+// isMatchAllQuery returns true if queryObj is a pure {"match_all": {}} with no
+// other clauses (no bool wrapper, no filters).
+func isMatchAllQuery(queryObj map[string]interface{}) bool {
+	if len(queryObj) != 1 {
+		return false
+	}
+	_, ok := queryObj["match_all"]
+	return ok
+}
+
+// hasDescSort returns true if any sort entry contains ":desc".
+func hasDescSort(sort []string) bool {
+	for _, s := range sort {
+		if strings.HasSuffix(s, ":desc") {
+			return true
+		}
+	}
+	return false
+}
+
+// matchAllShortcut reads N documents directly by internal doc ID, bypassing the
+// C++ search entirely. For match_all queries on 116M docs this reduces latency
+// from ~618ms (full TopK collection) to <2ms.
+//
+// When sort contains a desc field, reads from the BACK of the index (highest
+// doc IDs first). For chronologically-indexed time-series data, the newest
+// documents have the highest internal doc IDs, so reverse reading produces
+// correct desc-sorted results without scanning all documents.
+func (s *Shard) matchAllShortcut(totalStart time.Time, reopenTime, parseTime time.Duration, maxResults int, fieldsOnly []string, sort []string) (*SearchResult, error) {
+	readStart := time.Now()
+	s.mu.RLock()
+
+	totalDocs := int64(C.diagon_reader_num_docs(s.reader))
+	maxDocID := int(C.diagon_reader_max_doc(s.reader))
+	s.mu.RUnlock()
+
+	numToRead := maxResults
+	if int64(numToRead) > totalDocs {
+		numToRead = int(totalDocs)
+	}
+	if numToRead > maxDocID {
+		numToRead = maxDocID
+	}
+
+	// Determine read direction: reverse for desc sort (newest docs = highest doc IDs)
+	reverseRead := hasDescSort(sort)
+
+	hits := make([]*Hit, 0, numToRead)
+
+	// Pre-allocate C strings and reusable buffers
+	cIDField := C.CString("_id")
+	defer C.free(unsafe.Pointer(cIDField))
+	idBuf := make([]byte, 1024)
+
+	var cSourceField *C.char
+	var sourceBuf []byte
+	var cFieldNames []*C.char
+
+	if len(fieldsOnly) > 0 {
+		cFieldNames = make([]*C.char, len(fieldsOnly))
+		for i, f := range fieldsOnly {
+			cFieldNames[i] = C.CString(f)
+			defer C.free(unsafe.Pointer(cFieldNames[i]))
+		}
+	} else {
+		cSourceField = C.CString("_source")
+		defer C.free(unsafe.Pointer(cSourceField))
+		sourceBuf = make([]byte, 65536)
+	}
+
+	fieldBuf := make([]byte, 4096)
+
+	s.mu.RLock()
+
+	// Choose iteration direction based on sort
+	var docIDIter func() (int, bool)
+	if reverseRead {
+		cur := maxDocID - 1
+		docIDIter = func() (int, bool) {
+			if cur < 0 || len(hits) >= numToRead {
+				return 0, false
+			}
+			id := cur
+			cur--
+			return id, true
+		}
+	} else {
+		cur := 0
+		docIDIter = func() (int, bool) {
+			if cur >= maxDocID || len(hits) >= numToRead {
+				return 0, false
+			}
+			id := cur
+			cur++
+			return id, true
+		}
+	}
+
+	for {
+		docID, ok := docIDIter()
+		if !ok {
+			break
+		}
+
+		diagonDoc := C.diagon_reader_get_document(s.reader, C.int(docID))
+		if diagonDoc == nil {
+			continue // deleted or invalid doc
+		}
+
+		// Get _id
+		docIDString := fmt.Sprintf("doc_%d", docID)
+		if C.diagon_document_get_field_value(diagonDoc, cIDField,
+			(*C.char)(unsafe.Pointer(&idBuf[0])), C.size_t(len(idBuf))) {
+			for j := 0; j < len(idBuf); j++ {
+				if idBuf[j] == 0 {
+					docIDString = string(idBuf[:j])
+					break
+				}
+			}
+		}
+
+		var doc map[string]interface{}
+		if len(fieldsOnly) > 0 {
+			doc = make(map[string]interface{}, len(fieldsOnly))
+			for fi, cFN := range cFieldNames {
+				if C.diagon_document_get_field_value(diagonDoc, cFN,
+					(*C.char)(unsafe.Pointer(&fieldBuf[0])), C.size_t(len(fieldBuf))) {
+					for j := 0; j < len(fieldBuf); j++ {
+						if fieldBuf[j] == 0 {
+							if j > 0 {
+								doc[fieldsOnly[fi]] = string(fieldBuf[:j])
+							}
+							break
+						}
+					}
+				}
+			}
+		} else {
+			if C.diagon_document_get_field_value(diagonDoc, cSourceField,
+				(*C.char)(unsafe.Pointer(&sourceBuf[0])), C.size_t(len(sourceBuf))) {
+				for j := 0; j < len(sourceBuf); j++ {
+					if sourceBuf[j] == 0 {
+						if j > 0 {
+							json.Unmarshal(sourceBuf[:j], &doc)
+						}
+						break
+					}
+				}
+			}
+		}
+
+		C.diagon_free_document(diagonDoc)
+
+		if doc == nil {
+			doc = make(map[string]interface{})
+		}
+
+		hits = append(hits, &Hit{
+			ID:     docIDString,
+			Score:  1.0, // match_all: constant score
+			Source: doc,
+		})
+	}
+	s.mu.RUnlock()
+	readTime := time.Since(readStart)
+
+	totalTime := time.Since(totalStart)
+	result := &SearchResult{
+		Took:      totalTime.Milliseconds(),
+		TotalHits: totalDocs,
+		MaxScore:  1.0,
+		Hits:      hits,
+	}
+
+	s.logger.Info("match_all shortcut: direct doc read",
+		zap.Duration("reopen_reader", reopenTime),
+		zap.Duration("parse_query", parseTime),
+		zap.Duration("direct_read", readTime),
+		zap.Duration("total", totalTime),
+		zap.Int("hits_returned", len(hits)),
+		zap.Int64("total_hits", totalDocs),
+		zap.Bool("reverse", reverseRead))
+
+	return result, nil
+}
+
+func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults int, fieldsOnly []string, sort []string) (*SearchResult, error) {
 	totalStart := time.Now()
 	if maxResults <= 0 {
 		maxResults = 100
 	}
 
 	reopenStart := time.Now()
-	s.mu.Lock()
 
-	// Only commit and reopen reader if there have been writes since last open
+	// Fast path (RLock): check if reader is already open. This allows
+	// concurrent searches without serializing on the write lock.
+	s.mu.RLock()
 	needReopen := s.readerDirty || s.reader == nil
+	s.mu.RUnlock()
+
 	if needReopen {
-		// Commit pending changes to make them visible
-		if s.writer != nil {
-			if !C.diagon_commit(s.writer) {
+		// Slow path (WLock): reopen reader. Double-check after acquiring
+		// write lock since another goroutine may have already reopened.
+		s.mu.Lock()
+		needReopen = s.readerDirty || s.reader == nil
+		if needReopen {
+			// Only commit if there are actual dirty writes. When reader is nil
+			// after restart (readerDirty=false), the index is already committed
+			// from the previous run. Skipping the commit avoids a potentially
+			// minutes-long waitForMerges on large indices (116M+ docs).
+			if s.readerDirty && s.writer != nil {
+				if !C.diagon_commit(s.writer) {
+					errMsg := C.GoString(C.diagon_last_error())
+					s.logger.Warn("Failed to commit before search", zap.String("error", errMsg))
+					// Continue anyway - try to open reader with whatever is committed
+				}
+			}
+
+			// Close existing reader/searcher
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+				s.reader = nil
+			}
+
+			// Open fresh reader
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader == nil {
 				s.mu.Unlock()
 				errMsg := C.GoString(C.diagon_last_error())
-				s.logger.Warn("Failed to commit before search", zap.String("error", errMsg))
+				return nil, fmt.Errorf("failed to open reader: %s", errMsg)
 			}
-		}
 
-		// Close existing reader/searcher
-		if s.searcher != nil {
-			C.diagon_free_index_searcher(s.searcher)
-			s.searcher = nil
-		}
-		if s.reader != nil {
-			C.diagon_close_index_reader(s.reader)
-			s.reader = nil
-		}
+			// Create fresh searcher
+			s.searcher = C.diagon_create_index_searcher(s.reader)
+			if s.searcher == nil {
+				s.mu.Unlock()
+				errMsg := C.GoString(C.diagon_last_error())
+				return nil, fmt.Errorf("failed to create searcher: %s", errMsg)
+			}
 
-		// Open fresh reader
-		s.reader = C.diagon_open_index_reader(s.directory)
-		if s.reader == nil {
-			s.mu.Unlock()
-			errMsg := C.GoString(C.diagon_last_error())
-			return nil, fmt.Errorf("failed to open reader: %s", errMsg)
+			s.readerDirty = false
 		}
-
-		// Create fresh searcher
-		s.searcher = C.diagon_create_index_searcher(s.reader)
-		if s.searcher == nil {
-			s.mu.Unlock()
-			errMsg := C.GoString(C.diagon_last_error())
-			return nil, fmt.Errorf("failed to create searcher: %s", errMsg)
-		}
-
-		s.readerDirty = false
+		s.mu.Unlock()
 	}
 
-	s.mu.Unlock()
+	// Hold RLock during the actual search to prevent Refresh() from
+	// closing the reader/searcher while we're using them.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	reopenTime := time.Since(reopenStart)
 
 	// Parse query JSON
@@ -1524,6 +1909,15 @@ func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults
 	if err := json.Unmarshal(query, &queryObj); err != nil {
 		return nil, fmt.Errorf("failed to parse query: %w", err)
 	}
+	parseTime := time.Since(parseStart)
+
+	// match_all shortcut: for small result sets, skip the full C++ search and
+	// directly read documents by internal doc ID. diagon_search with match_all
+	// iterates ALL documents (O(N) scoring) even when only a few results are
+	// needed. Direct doc reads are O(maxResults) instead.
+	if isMatchAllQuery(queryObj) && maxResults <= 10000 {
+		return s.matchAllShortcut(totalStart, reopenTime, parseTime, maxResults, fieldsOnly, sort)
+	}
 
 	// Convert to Diagon query
 	diagonQuery, err := s.convertQueryToDiagon(queryObj)
@@ -1531,7 +1925,6 @@ func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults
 		return nil, err
 	}
 	defer C.diagon_free_query(diagonQuery)
-	parseTime := time.Since(parseStart)
 
 	// Execute search with the specified limit
 	searchStart := time.Now()
@@ -1698,28 +2091,34 @@ func (s *Shard) SearchAndAggregate(query []byte, maxResults int, fields []string
 		maxResults = 200000
 	}
 
-	// Ensure reader is open
-	s.mu.Lock()
+	// Fast path: check under RLock if reader is already open
+	s.mu.RLock()
 	needReopen := s.readerDirty || s.reader == nil
+	s.mu.RUnlock()
+
 	if needReopen {
-		if s.writer != nil {
-			C.diagon_commit(s.writer)
+		s.mu.Lock()
+		needReopen = s.readerDirty || s.reader == nil
+		if needReopen {
+			if s.readerDirty && s.writer != nil {
+				C.diagon_commit(s.writer)
+			}
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+				s.reader = nil
+			}
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader != nil {
+				s.searcher = C.diagon_create_index_searcher(s.reader)
+			}
+			s.readerDirty = false
 		}
-		if s.searcher != nil {
-			C.diagon_free_index_searcher(s.searcher)
-			s.searcher = nil
-		}
-		if s.reader != nil {
-			C.diagon_close_index_reader(s.reader)
-			s.reader = nil
-		}
-		s.reader = C.diagon_open_index_reader(s.directory)
-		if s.reader != nil {
-			s.searcher = C.diagon_create_index_searcher(s.reader)
-		}
-		s.readerDirty = false
+		s.mu.Unlock()
 	}
-	s.mu.Unlock()
 
 	// Parse query
 	var queryObj map[string]interface{}
@@ -1846,6 +2245,166 @@ func (s *Shard) SearchAndAggregate(query []byte, maxResults int, fields []string
 	return totalHits, docs, nil
 }
 
+// DirectAggScan iterates documents by internal doc ID and extracts field values
+// for aggregation. Uses batch C extraction (1 CGO call per field instead of
+// 3 CGO calls per doc per field) and an in-memory column cache to avoid
+// re-scanning on repeated queries. For match_all agg-only queries.
+func (s *Shard) DirectAggScan(fields []string, maxDocs int) (int64, []AggDocValues, error) {
+	if maxDocs <= 0 {
+		maxDocs = 200000
+	}
+
+	// Ensure reader is open
+	s.mu.RLock()
+	needReopen := s.readerDirty || s.reader == nil
+	s.mu.RUnlock()
+
+	if needReopen {
+		s.mu.Lock()
+		needReopen = s.readerDirty || s.reader == nil
+		if needReopen {
+			if s.readerDirty && s.writer != nil {
+				C.diagon_commit(s.writer)
+			}
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+				s.reader = nil
+			}
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader != nil {
+				s.searcher = C.diagon_create_index_searcher(s.reader)
+			}
+			s.readerDirty = false
+			// Invalidate column cache on reader reopen
+			s.columnCacheMu.Lock()
+			s.columnCache = nil
+			s.columnCacheN = 0
+			s.columnCacheMu.Unlock()
+		}
+		s.mu.Unlock()
+	}
+
+	s.mu.RLock()
+	if s.reader == nil {
+		s.mu.RUnlock()
+		return 0, nil, fmt.Errorf("reader not initialized")
+	}
+	totalDocs := int64(C.diagon_reader_num_docs(s.reader))
+	maxDocID := int(C.diagon_reader_max_doc(s.reader))
+	s.mu.RUnlock()
+
+	if maxDocs > maxDocID {
+		maxDocs = maxDocID
+	}
+
+	if len(fields) == 0 {
+		return totalDocs, nil, nil
+	}
+
+	// Check column cache for all requested fields
+	s.columnCacheMu.RLock()
+	allCached := s.columnCache != nil && s.columnCacheN > 0
+	if allCached {
+		for _, f := range fields {
+			if _, ok := s.columnCache[f]; !ok {
+				allCached = false
+				break
+			}
+		}
+	}
+	if allCached {
+		// All fields cached — build AggDocValues from pure Go arrays (no CGO)
+		n := s.columnCacheN
+		if n > maxDocs {
+			n = maxDocs
+		}
+		docs := make([]AggDocValues, n)
+		for i := 0; i < n; i++ {
+			docs[i].Fields = make(map[string]AggFieldValue, len(fields))
+			for _, f := range fields {
+				v := s.columnCache[f][i]
+				if v != "" {
+					docs[i].Fields[f] = AggFieldValue{StringVal: v}
+				}
+			}
+		}
+		s.columnCacheMu.RUnlock()
+		return totalDocs, docs, nil
+	}
+	s.columnCacheMu.RUnlock()
+
+	// Batch extraction: 1 CGO call per field instead of 3*N per-doc calls.
+	// For 200K docs with 3 fields: 3 CGO calls vs ~1M.
+	bufSize := maxDocs * 128 // 128 bytes avg per field value
+	if bufSize < 65536 {
+		bufSize = 65536
+	}
+
+	// Extract each field with a single batch C call
+	columnData := make(map[string][]string, len(fields))
+	var numDocs int
+
+	s.mu.RLock()
+	for _, field := range fields {
+		buf := make([]byte, bufSize)
+		lengths := make([]C.int, maxDocs)
+		cField := C.CString(field)
+
+		n := int(C.batch_scan_field_values(
+			s.reader, cField,
+			(*C.char)(unsafe.Pointer(&buf[0])), C.int(bufSize),
+			&lengths[0], C.int(maxDocs)))
+
+		C.free(unsafe.Pointer(cField))
+
+		// Parse concatenated buffer into string slice
+		vals := make([]string, n)
+		offset := 0
+		for i := 0; i < n; i++ {
+			l := int(lengths[i])
+			if l > 0 && offset+l <= len(buf) {
+				vals[i] = string(buf[offset : offset+l])
+				offset += l + 1 // +1 for null terminator
+			}
+		}
+		columnData[field] = vals
+		numDocs = n // all fields should return same doc count
+	}
+	s.mu.RUnlock()
+
+	// Store in column cache
+	s.columnCacheMu.Lock()
+	if s.columnCache == nil {
+		s.columnCache = make(map[string][]string, len(fields))
+	}
+	for f, vals := range columnData {
+		s.columnCache[f] = vals
+	}
+	s.columnCacheN = numDocs
+	s.columnCacheMu.Unlock()
+
+	// Build AggDocValues from extracted columns
+	n := numDocs
+	if n > maxDocs {
+		n = maxDocs
+	}
+	docs := make([]AggDocValues, n)
+	for i := 0; i < n; i++ {
+		docs[i].Fields = make(map[string]AggFieldValue, len(fields))
+		for _, f := range fields {
+			if i < len(columnData[f]) && columnData[f][i] != "" {
+				docs[i].Fields[f] = AggFieldValue{StringVal: columnData[f][i]}
+			}
+		}
+	}
+
+	return totalDocs, docs, nil
+}
+
 // DocCount returns the number of documents in the shard index.
 func (s *Shard) DocCount() int64 {
 	s.mu.RLock()
@@ -1862,8 +2421,9 @@ type TermBucket struct {
 	DocCount int64
 }
 
-// ComputeTermsAgg computes a terms aggregation entirely in C, scanning all documents
-// in the reader and building a hash map of field values → counts.
+// ComputeTermsAgg computes a terms aggregation in C by scanning documents
+// and building a hash map of field values → counts. Capped at 500K docs to
+// avoid multi-minute scans on large indices; results are approximate above that.
 // Results are cached until the reader is refreshed.
 func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	if size <= 0 {
@@ -1880,31 +2440,42 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	}
 	s.termsAggCacheMu.RUnlock()
 
-	// Ensure reader is open
-	s.mu.Lock()
-	if s.reader == nil || s.readerDirty {
-		// Invalidate cache on reader reopen
-		s.termsAggCacheMu.Lock()
-		s.termsAggCache = nil
-		s.termsAggCacheMu.Unlock()
+	// Fast path: check under RLock if reader is already open
+	s.mu.RLock()
+	needReopen := s.reader == nil || s.readerDirty
+	s.mu.RUnlock()
 
-		if s.writer != nil {
-			C.diagon_commit(s.writer)
+	if needReopen {
+		s.mu.Lock()
+		needReopen = s.reader == nil || s.readerDirty
+		if needReopen {
+			// Invalidate caches on reader reopen
+			s.termsAggCacheMu.Lock()
+			s.termsAggCache = nil
+			s.termsAggCacheMu.Unlock()
+			s.columnCacheMu.Lock()
+			s.columnCache = nil
+			s.columnCacheN = 0
+			s.columnCacheMu.Unlock()
+
+			if s.readerDirty && s.writer != nil {
+				C.diagon_commit(s.writer)
+			}
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+			}
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader != nil {
+				s.searcher = C.diagon_create_index_searcher(s.reader)
+			}
+			s.readerDirty = false
 		}
-		if s.searcher != nil {
-			C.diagon_free_index_searcher(s.searcher)
-			s.searcher = nil
-		}
-		if s.reader != nil {
-			C.diagon_close_index_reader(s.reader)
-		}
-		s.reader = C.diagon_open_index_reader(s.directory)
-		if s.reader != nil {
-			s.searcher = C.diagon_create_index_searcher(s.reader)
-		}
-		s.readerDirty = false
+		s.mu.Unlock()
 	}
-	s.mu.Unlock()
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1919,11 +2490,16 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	// Allocate output buckets
 	outBuckets := make([]C.TermBucketC, size)
 
+	// Cap scan at 500K docs (~3.5s at 7µs/doc). Above this threshold the
+	// results are approximate (sampled from the first 500K documents).
+	const maxDocsToScan = 500000
+
 	n := C.compute_terms_agg_stored(
 		s.reader,
 		cField,
 		&outBuckets[0],
 		C.int(size),
+		C.int(maxDocsToScan),
 	)
 
 	if n <= 0 {
@@ -1947,6 +2523,52 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	s.termsAggCacheMu.Unlock()
 
 	return buckets, nil
+}
+
+// ComputeCardinality returns the approximate number of unique values for a field.
+// Uses sampled reading (50K docs uniformly spaced) to avoid full-index scan on large indices.
+// For low-cardinality fields, result is exact. For high-cardinality, approximate.
+func (s *Shard) ComputeCardinality(field string) (int64, error) {
+	// Ensure reader is open (RLock fast path)
+	s.mu.RLock()
+	needReopen := s.reader == nil || s.readerDirty
+	s.mu.RUnlock()
+
+	if needReopen {
+		s.mu.Lock()
+		needReopen = s.reader == nil || s.readerDirty
+		if needReopen {
+			if s.readerDirty && s.writer != nil {
+				C.diagon_commit(s.writer)
+			}
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+			}
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader != nil {
+				s.searcher = C.diagon_create_index_searcher(s.reader)
+			}
+			s.readerDirty = false
+		}
+		s.mu.Unlock()
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.reader == nil {
+		return 0, fmt.Errorf("reader not initialized")
+	}
+
+	cField := C.CString(field)
+	defer C.free(unsafe.Pointer(cField))
+
+	result := C.compute_cardinality_sampled(s.reader, cField, C.int(5000))
+	return int64(result), nil
 }
 
 // getDocumentByInternalID retrieves a document's stored fields given its internal Diagon doc ID
@@ -2139,7 +2761,12 @@ func (s *Shard) DeleteDocument(docID string) error {
 	return fmt.Errorf("document deletion not yet implemented in Diagon Phase 4")
 }
 
-// ForceMerge optimizes the index by merging segments
+// ForceMerge optimizes the index by cascading forced merges with progressively
+// lower segment targets. Each step uses diagon_force_merge(N) which creates groups
+// of ~(current/N) segments and merges each group separately via SegmentMerger.
+// Key insight: SegmentMerger's MergedTermsEnum uses O(N) linear scan per term,
+// so keeping group sizes small (~10) is critical. Cascading 10x reductions
+// (10000→1000→100→10→1) keeps each merge manageable.
 func (s *Shard) ForceMerge(maxSegments int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2148,14 +2775,71 @@ func (s *Shard) ForceMerge(maxSegments int) error {
 		return fmt.Errorf("writer not initialized")
 	}
 
-	s.logger.Info("Starting force merge", zap.Int("max_segments", maxSegments))
+	// NOTE: Do NOT call cleanupMergedFiles here! After a successful force merge,
+	// committed segments may have _merged_* prefixes. Deleting them destroys data.
+	// Diagon's IndexWriter handles cleanup of unreferenced files on open.
 
-	if !C.diagon_force_merge(s.writer, C.int(maxSegments)) {
-		errMsg := C.GoString(C.diagon_last_error())
-		return fmt.Errorf("force merge failed: %s", errMsg)
+	currentSegs := countCFSFiles(s.path)
+	s.logger.Info("Starting cascading force merge",
+		zap.Int("current_segments", currentSegs),
+		zap.Int("target_segments", maxSegments))
+
+	if currentSegs <= maxSegments {
+		s.logger.Info("Already at target segment count")
+		return nil
 	}
 
-	s.logger.Info("Force merge completed", zap.Int("max_segments", maxSegments))
+	// Build cascade targets: 10x reduction each step
+	// e.g., 3372 segments → targets: [337, 33, 3, 1]
+	var targets []int
+	target := currentSegs / 10
+	for target > maxSegments {
+		targets = append(targets, target)
+		target = target / 10
+	}
+	targets = append(targets, maxSegments)
+
+	for step, t := range targets {
+		segs := countCFSFiles(s.path)
+		if segs <= t {
+			s.logger.Info("Step skipped, already at target",
+				zap.Int("step", step+1),
+				zap.Int("segments", segs),
+				zap.Int("target", t))
+			continue
+		}
+
+		groupSize := segs / t
+		if groupSize < 2 {
+			groupSize = 2
+		}
+
+		s.logger.Info("Force merge step starting",
+			zap.Int("step", step+1),
+			zap.Int("total_steps", len(targets)),
+			zap.Int("from_segments", segs),
+			zap.Int("to_segments", t),
+			zap.Int("group_size", groupSize))
+
+		startTime := time.Now()
+
+		if !C.diagon_force_merge(s.writer, C.int(t)) {
+			errMsg := C.GoString(C.diagon_last_error())
+			return fmt.Errorf("force merge step %d (target=%d) failed: %s", step+1, t, errMsg)
+		}
+
+		afterSegs := countCFSFiles(s.path)
+		elapsed := time.Since(startTime)
+		s.logger.Info("Force merge step completed",
+			zap.Int("step", step+1),
+			zap.Int("segments_before", segs),
+			zap.Int("segments_after", afterSegs),
+			zap.Duration("elapsed", elapsed))
+	}
+
+	finalSegs := countCFSFiles(s.path)
+	s.logger.Info("Cascading force merge completed",
+		zap.Int("final_segments", finalSegs))
 	return nil
 }
 
