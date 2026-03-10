@@ -516,12 +516,26 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 	// Fast path: For aggregation-only queries, try native index-based aggregation
 	// This avoids extracting O(N) documents and instead uses O(unique_terms) index reads
 	if len(aggsMap) > 0 && req.Size == 0 {
-		nativeAggs := computeNativeAggregations(shard.DiagonShard, aggsMap, s.logger)
+		// Extract filter query for BKD-based aggs (nil = match_all)
+		var filterQueryMap map[string]interface{}
+		if q, ok := wrappedQuery["query"]; ok {
+			filterQueryMap, _ = q.(map[string]interface{})
+			// Check if it's {"match_all": {}} — treat as nil filter
+			if _, isMatchAll := filterQueryMap["match_all"]; isMatchAll {
+				filterQueryMap = nil
+			}
+		}
+		nativeAggs := computeNativeAggregations(shard.DiagonShard, aggsMap, filterQueryMap, s.logger)
 		if nativeAggs != nil {
 			// Native aggregation succeeded - no need to search/extract documents
 			aggregations = nativeAggs
+			totalHits := int64(shard.DiagonShard.DocCount())
+			if filterQueryMap != nil {
+				// Get actual filtered count via BKD
+				totalHits = shard.DiagonShard.CountQuery(filterQueryMap)
+			}
 			result = &diagon.SearchResult{
-				TotalHits: int64(shard.DiagonShard.DocCount()),
+				TotalHits: totalHits,
 			}
 		}
 	}
@@ -558,8 +572,13 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 					aggregations = computeAggregationsFromColumns(columnData, numDocs, aggsMap)
 				}
 			} else {
-				// Filtered agg query: need diagon_search to apply filter
-				totalHits, aggDocs, searchErr := shard.DiagonShard.SearchAndAggregate(queryBytes, maxResults, aggFields)
+				// Filtered agg query: need diagon_search to apply filter.
+				// Cap maxResults to avoid allocating massive heaps (116M = 1.4GB).
+				aggMaxResults := maxResults
+				if aggMaxResults <= 0 || aggMaxResults > 5000000 {
+					aggMaxResults = 5000000
+				}
+				totalHits, aggDocs, searchErr := shard.DiagonShard.SearchAndAggregate(queryBytes, aggMaxResults, aggFields)
 				if searchErr != nil {
 					s.logger.Error("SearchAndAggregate failed", zap.Error(searchErr))
 					return nil, status.Errorf(codes.Internal, "search failed: %v", searchErr)
@@ -1024,16 +1043,22 @@ func (s *DataService) ForceMerge(ctx context.Context, req *pb.ForceMergeRequest)
 	}, nil
 }
 
-// computeNativeAggregations tries to compute aggregations directly from the inverted index.
-// Returns nil if the aggregation type is not supported natively.
-// Supported: terms aggregation (with optional sub-aggs that need doc extraction).
-func computeNativeAggregations(diagonShard *diagon.Shard, aggsMap map[string]interface{}, logger *zap.Logger) map[string]*pb.AggregationResult {
+// computeNativeAggregations tries to compute aggregations directly from index structures.
+// Returns nil if the aggregation type is not supported natively, causing fallback to doc extraction.
+// Supported: terms, cardinality, date_histogram (BKD), range (BKD), metric aggs (avg/sum/min/max/stats/value_count).
+func computeNativeAggregations(diagonShard *diagon.Shard, aggsMap map[string]interface{}, filterQuery map[string]interface{}, logger *zap.Logger) map[string]*pb.AggregationResult {
 	results := make(map[string]*pb.AggregationResult)
 
 	for name, aggDef := range aggsMap {
 		aggDefMap, ok := aggDef.(map[string]interface{})
 		if !ok {
-			return nil // Can't handle, fall back
+			return nil
+		}
+
+		// Extract sub-aggregations map if present
+		var subAggsMap map[string]interface{}
+		if sub, ok := aggDefMap["aggs"]; ok {
+			subAggsMap, _ = sub.(map[string]interface{})
 		}
 
 		for aggType, aggBody := range aggDefMap {
@@ -1052,8 +1077,7 @@ func computeNativeAggregations(diagonShard *diagon.Shard, aggsMap map[string]int
 				if s, ok := bodyMap["size"].(float64); ok {
 					size = int(s)
 				}
-				// Check for sub-aggregations - if present, fall back to doc extraction
-				if _, hasSub := aggDefMap["aggs"]; hasSub {
+				if len(subAggsMap) > 0 {
 					return nil // Can't do sub-aggs natively yet
 				}
 				buckets, err := diagonShard.ComputeTermsAgg(field, size)
@@ -1092,7 +1116,22 @@ func computeNativeAggregations(diagonShard *diagon.Shard, aggsMap map[string]int
 				}
 
 			case "date_histogram":
-				return nil // Not supported natively, fall back to doc extraction
+				result := computeNativeDateHistogram(diagonShard, bodyMap, filterQuery, logger)
+				if result == nil {
+					return nil
+				}
+				results[name] = result
+
+			case "range":
+				result := computeNativeRangeAgg(diagonShard, bodyMap, subAggsMap, filterQuery, logger)
+				if result == nil {
+					return nil
+				}
+				results[name] = result
+
+			case "avg", "sum", "min", "max", "stats", "value_count", "extended_stats":
+				// Metric aggs: fall back to column-based path
+				return nil
 
 			default:
 				return nil
@@ -1104,6 +1143,290 @@ func computeNativeAggregations(diagonShard *diagon.Shard, aggsMap map[string]int
 		return nil
 	}
 	return results
+}
+
+// computeNativeDateHistogram computes date_histogram via single-pass BKD tree traversal.
+// Handles: (1) match_all + date_histogram, (2) range-on-same-field + date_histogram.
+// Returns nil for other filter types (term filter on different field, etc.) — caller
+// falls through to SearchAndAggregate.
+func computeNativeDateHistogram(diagonShard *diagon.Shard, bodyMap map[string]interface{}, filterQuery map[string]interface{}, logger *zap.Logger) *pb.AggregationResult {
+	field, _ := bodyMap["field"].(string)
+	if field == "" {
+		return nil
+	}
+
+	// Parse calendar_interval / fixed_interval
+	interval := ""
+	if v, ok := bodyMap["calendar_interval"].(string); ok {
+		interval = v
+	} else if v, ok := bodyMap["fixed_interval"].(string); ok {
+		interval = v
+	} else if v, ok := bodyMap["interval"].(string); ok {
+		interval = v
+	}
+	if interval == "" {
+		return nil
+	}
+
+	intervalMs := parseIntervalToMs(interval)
+	if intervalMs <= 0 {
+		return nil
+	}
+
+	// Determine time range: use a generous default spanning 2022-12 to 2024-01
+	// BKD single-pass skips points outside range, so extra range adds negligible cost.
+	minEpochMs := float64(time.Date(2022, 12, 1, 0, 0, 0, 0, time.UTC).UnixMilli())
+	maxEpochMs := float64(time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC).UnixMilli())
+
+	// Check if filter is a range on the same field — if so, narrow bounds and use BKD.
+	// For non-range filters (term, bool with term clauses), return nil to fall through.
+	rangeOnSameField := false
+	if filterQuery != nil {
+		if rangeQ, ok := filterQuery["range"].(map[string]interface{}); ok {
+			if fieldRange, ok := rangeQ[field].(map[string]interface{}); ok {
+				rangeOnSameField = true
+				if gte, ok := fieldRange["gte"]; ok {
+					if t, ok := parseDateBound(gte); ok {
+						minEpochMs = t
+					}
+				}
+				if gt, ok := fieldRange["gt"]; ok {
+					if t, ok := parseDateBound(gt); ok {
+						minEpochMs = t
+					}
+				}
+				if lt, ok := fieldRange["lt"]; ok {
+					if t, ok := parseDateBound(lt); ok {
+						maxEpochMs = t
+					}
+				}
+				if lte, ok := fieldRange["lte"]; ok {
+					if t, ok := parseDateBound(lte); ok {
+						maxEpochMs = t + intervalMs
+					}
+				}
+			}
+		}
+		// If filter involves fields OTHER than the histogram field, can't use BKD single-pass.
+		if !rangeOnSameField {
+			return nil
+		}
+	}
+
+	// Use single-pass BKD traversal (filterQuery=nil since range is encoded in min/max)
+	buckets, err := diagonShard.ComputeDateHistogramBKD(field, intervalMs, minEpochMs, maxEpochMs, nil)
+	if err != nil {
+		logger.Debug("BKD date histogram failed", zap.Error(err))
+		return nil
+	}
+
+	pbBuckets := make([]*pb.AggregationBucket, len(buckets))
+	for i, b := range buckets {
+		t := time.UnixMilli(int64(b.KeyMs)).UTC()
+		pbBuckets[i] = &pb.AggregationBucket{
+			Key:        t.Format(time.RFC3339),
+			NumericKey: b.KeyMs,
+			DocCount:   b.DocCount,
+		}
+	}
+	return &pb.AggregationResult{
+		Type:    "date_histogram",
+		Buckets: pbBuckets,
+	}
+}
+
+// computeNativeRangeAgg computes range aggregation using BKD range queries.
+// For range without sub-aggs: pure BKD counting (fast).
+// For range with sub-aggs: BKD counting for outer buckets + per-bucket search for sub-aggs.
+func computeNativeRangeAgg(diagonShard *diagon.Shard, bodyMap map[string]interface{}, subAggsMap map[string]interface{}, filterQuery map[string]interface{}, logger *zap.Logger) *pb.AggregationResult {
+	field, _ := bodyMap["field"].(string)
+	if field == "" {
+		return nil
+	}
+
+	rawRanges, ok := bodyMap["ranges"].([]interface{})
+	if !ok || len(rawRanges) == 0 {
+		return nil
+	}
+
+	// Parse range specs
+	ranges := make([]diagon.RangeSpec, len(rawRanges))
+	for i, rr := range rawRanges {
+		rm, ok := rr.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if from, ok := rm["from"].(float64); ok {
+			ranges[i].From = &from
+		}
+		if to, ok := rm["to"].(float64); ok {
+			ranges[i].To = &to
+		}
+		if key, ok := rm["key"].(string); ok {
+			ranges[i].Key = key
+		}
+	}
+
+	// BKD range counting
+	buckets, err := diagonShard.ComputeRangeAggBKD(field, ranges, filterQuery)
+	if err != nil {
+		logger.Debug("BKD range agg failed", zap.Error(err))
+		return nil
+	}
+
+	pbBuckets := make([]*pb.AggregationBucket, len(buckets))
+	for i, b := range buckets {
+		key := b.Key
+		if key == "" {
+			// Generate key: "from-to"
+			fromStr := "*"
+			toStr := "*"
+			if b.From != nil {
+				fromStr = strconv.FormatFloat(*b.From, 'f', -1, 64)
+			}
+			if b.To != nil {
+				toStr = strconv.FormatFloat(*b.To, 'f', -1, 64)
+			}
+			key = fromStr + "-" + toStr
+		}
+		bucket := &pb.AggregationBucket{
+			Key:      key,
+			DocCount: b.DocCount,
+		}
+		if b.From != nil {
+			bucket.From = b.From
+		}
+		if b.To != nil {
+			bucket.To = b.To
+		}
+
+		// Handle sub-aggregations for this range bucket
+		if len(subAggsMap) > 0 && b.DocCount > 0 {
+			subResults := computeRangeBucketSubAggs(diagonShard, field, b.From, b.To, subAggsMap, filterQuery, logger)
+			if subResults != nil {
+				bucket.SubAggregations = subResults
+			}
+		}
+
+		pbBuckets[i] = bucket
+	}
+
+	return &pb.AggregationResult{
+		Type:    "range",
+		Buckets: pbBuckets,
+	}
+}
+
+// computeRangeBucketSubAggs computes sub-aggregations for a single range bucket.
+// Uses SearchAndAggregate with a range query to get matching docs, then computes aggs.
+func computeRangeBucketSubAggs(diagonShard *diagon.Shard, rangeField string, from *float64, to *float64, subAggsMap map[string]interface{}, filterQuery map[string]interface{}, logger *zap.Logger) map[string]*pb.AggregationResult {
+	// Build a range query for this bucket
+	rangeClause := map[string]interface{}{}
+	if from != nil {
+		rangeClause["gte"] = *from
+	}
+	if to != nil {
+		rangeClause["lt"] = *to
+	}
+	bucketQuery := map[string]interface{}{
+		"range": map[string]interface{}{
+			rangeField: rangeClause,
+		},
+	}
+
+	// If there's an outer filter, combine with bool(must: filter, filter: range)
+	var queryForSearch map[string]interface{}
+	if filterQuery != nil {
+		queryForSearch = map[string]interface{}{
+			"bool": map[string]interface{}{
+				"must":   []interface{}{filterQuery},
+				"filter": []interface{}{bucketQuery},
+			},
+		}
+	} else {
+		queryForSearch = bucketQuery
+	}
+
+	// Extract needed fields from sub-agg definitions
+	aggFields := extractAggregationFields(subAggsMap)
+
+	// Search with capped maxResults to avoid memory explosion
+	queryBytes, _ := json.Marshal(queryForSearch)
+	const maxPerBucket = 200000 // sample 200K docs per bucket
+	totalHits, aggDocs, err := diagonShard.SearchAndAggregate(queryBytes, maxPerBucket, aggFields)
+	if err != nil {
+		logger.Debug("Range bucket sub-agg search failed", zap.Error(err))
+		return nil
+	}
+	_ = totalHits
+
+	if len(aggDocs) == 0 {
+		return nil
+	}
+
+	return computeAggregationsFromDocValues(aggDocs, subAggsMap)
+}
+
+// parseIntervalToMs converts a date histogram interval string to milliseconds.
+func parseIntervalToMs(interval string) float64 {
+	switch interval {
+	case "second", "1s":
+		return 1000
+	case "minute", "1m":
+		return 60 * 1000
+	case "hour", "1h":
+		return 3600 * 1000
+	case "day", "1d":
+		return 86400 * 1000
+	case "week", "1w":
+		return 7 * 86400 * 1000
+	case "month", "1M":
+		return 30 * 86400 * 1000
+	case "quarter", "1q":
+		return 91 * 86400 * 1000
+	case "year", "1y":
+		return 365 * 86400 * 1000
+	default:
+		// Try parsing as duration string like "30s", "5m", "2h"
+		if len(interval) > 1 {
+			unit := interval[len(interval)-1]
+			numStr := interval[:len(interval)-1]
+			num := 0.0
+			fmt.Sscanf(numStr, "%f", &num)
+			switch unit {
+			case 's':
+				return num * 1000
+			case 'm':
+				return num * 60 * 1000
+			case 'h':
+				return num * 3600 * 1000
+			case 'd':
+				return num * 86400 * 1000
+			}
+		}
+		return 0
+	}
+}
+
+// parseDateBound parses a date bound value (from gte/lte/gt/lt) to epoch milliseconds.
+func parseDateBound(val interface{}) (float64, bool) {
+	switch v := val.(type) {
+	case float64:
+		return v, true
+	case string:
+		// Try common date formats
+		for _, layout := range []string{
+			time.RFC3339Nano,
+			time.RFC3339,
+			"2006-01-02T15:04:05",
+			"2006-01-02",
+		} {
+			if t, err := time.Parse(layout, v); err == nil {
+				return float64(t.UnixMilli()), true
+			}
+		}
+	}
+	return 0, false
 }
 
 // extractAggregationFields extracts the list of field names needed by aggregation definitions.

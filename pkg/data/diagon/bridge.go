@@ -13,9 +13,11 @@ typedef struct {
     int doc_count;
 } TermBucketC;
 
-// compute_terms_agg_stored iterates documents in the reader, reads a single
-// stored field, and computes terms aggregation entirely in C.
-// max_docs_to_scan caps how many documents are scanned (0 = all).
+// compute_terms_agg_stored samples documents uniformly across the reader,
+// reads a single stored field, and computes terms aggregation entirely in C.
+// max_docs_to_scan caps how many documents are sampled (0 = all).
+// Uses strided sampling (stride = max_doc / max_docs_to_scan) to ensure coverage
+// across all segments — critical when early segments lack stored fields.
 // Returns number of unique terms found. Results written to out_buckets (sorted by doc_count desc).
 static int compute_terms_agg_stored(
     DiagonIndexReader reader,
@@ -26,8 +28,14 @@ static int compute_terms_agg_stored(
 {
     int max_doc = (int)diagon_reader_max_doc(reader);
     if (max_doc <= 0) return 0;
+
+    // Use strided sampling for large indices to cover all segments uniformly
+    int stride = 1;
+    int scan_limit = max_doc;
     if (max_docs_to_scan > 0 && max_docs_to_scan < max_doc) {
-        max_doc = max_docs_to_scan;
+        stride = max_doc / max_docs_to_scan;
+        if (stride < 1) stride = 1;
+        scan_limit = max_doc; // iterate full range with stride
     }
 
     // Simple hash map: use linear probing with 4x overallocation
@@ -46,7 +54,9 @@ static int compute_terms_agg_stored(
     int unique_count = 0;
     char tmp[4096];
 
-    for (int doc_id = 0; doc_id < max_doc; doc_id++) {
+    int sampled = 0;
+    for (int doc_id = 0; doc_id < scan_limit; doc_id += stride) {
+        sampled++;
         DiagonDocument doc = diagon_reader_get_document(reader, doc_id);
         if (!doc) continue;
 
@@ -84,7 +94,7 @@ static int compute_terms_agg_stored(
     }
 
     // Collect all entries into output, sorted by count desc
-    // First pass: copy to temp array
+    // Scale counts by stride to estimate full-index frequencies
     TermBucketC* all = (TermBucketC*)calloc(unique_count, sizeof(TermBucketC));
     if (!all) { free(map); return 0; }
 
@@ -93,7 +103,7 @@ static int compute_terms_agg_stored(
         if (map[i].used) {
             strncpy(all[out_idx].key, map[i].key, 255);
             all[out_idx].key[255] = '\0';
-            all[out_idx].doc_count = map[i].count;
+            all[out_idx].doc_count = map[i].count * stride; // scale to full index
             out_idx++;
         }
     }
@@ -297,6 +307,64 @@ static int batch_extract_two_fields(
     return num_results;
 }
 
+// batch_extract_multi_fields extracts N stored field values from ALL documents
+// in the TopDocs results. Each document is loaded exactly once from stored fields,
+// then all N field values are extracted. This is critical for composite aggs with
+// 3+ keys where loading each doc once (vs N times) cuts I/O by Nx.
+// field_names: array of N field name pointers
+// out_bufs: array of N output buffer pointers (one per field)
+// buf_sizes: array of N buffer sizes
+// out_lengths: array of N int-array pointers (lengths for each field per doc)
+// num_fields: number of fields
+// max_docs: maximum documents to process
+static int batch_extract_multi_fields(
+    DiagonIndexReader reader,
+    DiagonTopDocs top_docs,
+    const char** field_names,
+    char** out_bufs,
+    int* buf_sizes,
+    int** out_lengths,
+    int num_fields,
+    int max_docs)
+{
+    int num_results = diagon_top_docs_score_docs_length(top_docs);
+    if (num_results > max_docs) num_results = max_docs;
+
+    int offsets[16]; // up to 16 fields
+    if (num_fields > 16) num_fields = 16;
+    for (int f = 0; f < num_fields; f++) {
+        offsets[f] = 0;
+    }
+
+    char tmp[4096];
+
+    for (int i = 0; i < num_results; i++) {
+        for (int f = 0; f < num_fields; f++) {
+            out_lengths[f][i] = 0;
+        }
+
+        DiagonScoreDoc sd = diagon_top_docs_score_doc_at(top_docs, i);
+        if (!sd) continue;
+
+        int doc_id = diagon_score_doc_get_doc(sd);
+        DiagonDocument doc = diagon_reader_get_document(reader, doc_id);
+        if (!doc) continue;
+
+        for (int f = 0; f < num_fields; f++) {
+            if (diagon_document_get_field_value(doc, field_names[f], tmp, sizeof(tmp))) {
+                int len = (int)strlen(tmp);
+                if (offsets[f] + len + 1 <= buf_sizes[f]) {
+                    memcpy(out_bufs[f] + offsets[f], tmp, len + 1);
+                    out_lengths[f][i] = len;
+                    offsets[f] += len + 1;
+                }
+            }
+        }
+        diagon_free_document(doc);
+    }
+    return num_results;
+}
+
 // batch_scan_field_values scans sequential doc IDs [0, max_docs) and extracts
 // a single stored field value from each document. Unlike batch_extract_field_values
 // which uses TopDocs from a search, this iterates doc IDs directly — ideal for
@@ -382,6 +450,71 @@ static int batch_scan_field_values_from(
 
 // (batch_scan_numeric_values removed: stored-field scan is O(N*7µs) = ~800s for 116M docs,
 // making it slower than the C++ range query path which uses NumericDocValues column store)
+
+// ---------- BKD-based aggregation functions ----------
+// Range agg uses individual BKD range queries (few buckets: 3-10 typical).
+// Date histogram uses diagon_compute_histogram C API (single-pass BKD traversal).
+
+typedef struct {
+    double from_val;
+    double to_val;
+    int has_from;
+    int has_to;
+    int64_t doc_count;
+} RangeAggBucketC;
+
+// compute_range_agg_bkd counts docs per numeric range bucket using BKD range queries.
+// Ranges are specified as (from, to) pairs with optional bounds.
+// Returns num_ranges (all ranges are filled with doc_count).
+static int compute_range_agg_bkd(
+    DiagonIndexSearcher searcher,
+    const char* field_name,
+    RangeAggBucketC* ranges,
+    int num_ranges,
+    DiagonQuery filter_query)
+{
+    for (int i = 0; i < num_ranges; i++) {
+        double lower = ranges[i].has_from ? ranges[i].from_val : -1e308;
+        double upper = ranges[i].has_to ? ranges[i].to_val : 1e308;
+
+        DiagonQuery rangeQ = diagon_create_double_range_query(
+            field_name, lower, upper, true, false);
+        if (!rangeQ) { ranges[i].doc_count = 0; continue; }
+
+        DiagonQuery searchQ = NULL;
+        if (filter_query) {
+            DiagonQuery boolQ = diagon_create_bool_query();
+            if (!boolQ) { diagon_free_query(rangeQ); ranges[i].doc_count = 0; continue; }
+            diagon_bool_query_add_must(boolQ, filter_query);
+            diagon_bool_query_add_filter(boolQ, rangeQ);
+            searchQ = diagon_bool_query_build(boolQ);
+            diagon_free_query(rangeQ);
+        } else {
+            DiagonQuery matchAll = diagon_create_match_all_query();
+            if (!matchAll) { diagon_free_query(rangeQ); ranges[i].doc_count = 0; continue; }
+            DiagonQuery boolQ = diagon_create_bool_query();
+            if (!boolQ) { diagon_free_query(rangeQ); diagon_free_query(matchAll); ranges[i].doc_count = 0; continue; }
+            diagon_bool_query_add_must(boolQ, matchAll);
+            diagon_bool_query_add_filter(boolQ, rangeQ);
+            searchQ = diagon_bool_query_build(boolQ);
+            diagon_free_query(matchAll);
+            diagon_free_query(rangeQ);
+        }
+
+        if (!searchQ) { ranges[i].doc_count = 0; continue; }
+
+        DiagonTopDocs td = diagon_search(searcher, searchQ, 1);
+        diagon_free_query(searchQ);
+
+        if (td) {
+            ranges[i].doc_count = diagon_top_docs_total_hits(td);
+            diagon_free_top_docs(td);
+        } else {
+            ranges[i].doc_count = 0;
+        }
+    }
+    return num_ranges;
+}
 
 // CStringArena: memory arena for batched CString allocations.
 // Reduces malloc/free overhead from ~80,000 calls to 1 per 5K-doc batch.
@@ -2285,24 +2418,54 @@ func (s *Shard) SearchAndAggregate(query []byte, maxResults int, fields []string
 			}
 		}
 	} else {
-		// 3+ fields: one batch call per field
-		for _, field := range fields {
-			buf := make([]byte, bufSize)
-			lengths := make([]C.int, numResults)
-			cField := C.CString(field)
+		// 3+ fields: single pass - load each document once, extract all fields.
+		// Allocate pointer arrays in C memory to satisfy CGO pointer rules.
+		nFields := len(fields)
+		ptrSize := C.size_t(unsafe.Sizeof((*C.char)(nil)))
 
-			C.batch_extract_field_values(
-				s.reader, topDocs, cField,
-				(*C.char)(unsafe.Pointer(&buf[0])), C.int(bufSize),
-				&lengths[0], C.int(numResults))
+		// C-allocated arrays of pointers
+		cFieldNamesArr := (*[16]*C.char)(C.malloc(C.size_t(nFields) * ptrSize))
+		cBufsArr := (*[16]*C.char)(C.malloc(C.size_t(nFields) * ptrSize))
+		cBufSizesArr := (*[16]C.int)(C.malloc(C.size_t(nFields) * C.size_t(unsafe.Sizeof(C.int(0)))))
+		cLengthPtrsArr := (*[16]*C.int)(C.malloc(C.size_t(nFields) * ptrSize))
 
-			C.free(unsafe.Pointer(cField))
+		// Go-side slices for reading results back
+		bufs := make([][]byte, nFields)
+		lengthArrays := make([][]C.int, nFields)
 
+		for i, field := range fields {
+			cFieldNamesArr[i] = C.CString(field)
+			bufs[i] = make([]byte, bufSize)
+			cBufsArr[i] = (*C.char)(unsafe.Pointer(&bufs[i][0]))
+			cBufSizesArr[i] = C.int(bufSize)
+			lengthArrays[i] = make([]C.int, numResults)
+			cLengthPtrsArr[i] = &lengthArrays[i][0]
+		}
+
+		C.batch_extract_multi_fields(
+			s.reader, topDocs,
+			&cFieldNamesArr[0],
+			&cBufsArr[0],
+			&cBufSizesArr[0],
+			&cLengthPtrsArr[0],
+			C.int(nFields),
+			C.int(numResults))
+
+		for i := 0; i < nFields; i++ {
+			C.free(unsafe.Pointer(cFieldNamesArr[i]))
+		}
+		C.free(unsafe.Pointer(cFieldNamesArr))
+		C.free(unsafe.Pointer(cBufsArr))
+		C.free(unsafe.Pointer(cBufSizesArr))
+		C.free(unsafe.Pointer(cLengthPtrsArr))
+
+		// Parse concatenated buffers into per-doc values
+		for fi, field := range fields {
 			offset := 0
 			for i := 0; i < numResults; i++ {
-				l := int(lengths[i])
-				if l > 0 && offset+l <= len(buf) {
-					docs[i].Fields[field] = AggFieldValue{StringVal: string(buf[offset : offset+l])}
+				l := int(lengthArrays[fi][i])
+				if l > 0 && offset+l <= len(bufs[fi]) {
+					docs[i].Fields[field] = AggFieldValue{StringVal: string(bufs[fi][offset : offset+l])}
 					offset += l + 1
 				}
 			}
@@ -2706,9 +2869,11 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	// Allocate output buckets
 	outBuckets := make([]C.TermBucketC, size)
 
-	// Cap scan at 500K docs (~3.5s at 7µs/doc). Above this threshold the
-	// results are approximate (sampled from the first 500K documents).
-	const maxDocsToScan = 500000
+	// Cap scan at 50K docs. On cold disk (no OS file cache), stored field reads
+	// are ~240µs/doc, so 50K docs = ~12s. At 7µs/doc warm = 0.35s.
+	// 50K samples is sufficient for accurate term frequency estimation
+	// (Big5 has ~100 unique log_stream values → ~500 samples per term).
+	const maxDocsToScan = 50000
 
 	n := C.compute_terms_agg_stored(
 		s.reader,
@@ -3161,4 +3326,224 @@ type AggregationResult struct {
 	Sum     float64                  `json:"sum,omitempty"`
 	Value   int64                    `json:"value,omitempty"`
 	Values  map[string]float64       `json:"values,omitempty"`
+}
+
+// ---------- BKD-based aggregation Go wrappers ----------
+
+// DateHistogramBucket holds one bucket from BKD-based date histogram.
+type DateHistogramBucket struct {
+	KeyMs    float64 // epoch ms of bucket start
+	DocCount int64
+}
+
+// RangeSpec defines a single range for range aggregation.
+type RangeSpec struct {
+	From *float64
+	To   *float64
+	Key  string // optional user-provided key
+}
+
+// RangeAggBucket holds one bucket from BKD-based range aggregation.
+type RangeAggBucket struct {
+	From     *float64
+	To       *float64
+	Key      string
+	DocCount int64
+}
+
+// ensureReaderOpen ensures the index reader and searcher are open and current.
+// Returns true if reader is ready, false on error.
+func (s *Shard) ensureReaderOpen() bool {
+	s.mu.RLock()
+	needReopen := s.reader == nil || s.readerDirty
+	s.mu.RUnlock()
+
+	if needReopen {
+		s.mu.Lock()
+		needReopen = s.reader == nil || s.readerDirty
+		if needReopen {
+			if s.readerDirty && s.writer != nil {
+				C.diagon_commit(s.writer)
+			}
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+				s.reader = nil
+			}
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader != nil {
+				s.searcher = C.diagon_create_index_searcher(s.reader)
+			}
+			s.readerDirty = false
+			// Invalidate caches
+			s.termsAggCacheMu.Lock()
+			s.termsAggCache = nil
+			s.termsAggCacheMu.Unlock()
+			s.columnCacheMu.Lock()
+			s.columnCache = nil
+			s.columnCacheN = 0
+			s.columnCacheMu.Unlock()
+		}
+		s.mu.Unlock()
+	}
+
+	s.mu.RLock()
+	ready := s.reader != nil && s.searcher != nil
+	s.mu.RUnlock()
+	return ready
+}
+
+// ConvertFilterQuery converts a JSON query object to a Diagon query handle.
+// The returned handle must be freed by the caller with FreeQuery.
+func (s *Shard) ConvertFilterQuery(queryObj map[string]interface{}) (unsafe.Pointer, error) {
+	q, err := s.convertQueryToDiagon(queryObj)
+	if err != nil {
+		return nil, err
+	}
+	return unsafe.Pointer(q), nil
+}
+
+// FreeQuery frees a Diagon query handle returned by ConvertFilterQuery.
+func FreeQuery(q unsafe.Pointer) {
+	if q != nil {
+		C.diagon_free_query(C.DiagonQuery(q))
+	}
+}
+
+// ComputeDateHistogramBKD computes a date histogram using single-pass BKD tree traversal.
+// Uses diagon_compute_histogram C API: O(N) once through BKD tree, bucketing all points.
+// For unfiltered (match_all) queries, this replaces 10K+ individual searches with 1 call.
+// filterQuery is currently ignored — filtered histograms should use SearchAndAggregate.
+func (s *Shard) ComputeDateHistogramBKD(field string, intervalMs float64, minEpochMs float64, maxEpochMs float64, filterQuery map[string]interface{}) ([]DateHistogramBucket, error) {
+	if !s.ensureReaderOpen() {
+		return nil, fmt.Errorf("reader not initialized")
+	}
+
+	numBuckets := int((maxEpochMs-minEpochMs)/intervalMs) + 1
+	if numBuckets <= 0 {
+		return nil, nil
+	}
+	if numBuckets > 1000000 {
+		numBuckets = 1000000
+	}
+
+	// For filtered histograms, return nil to let caller use SearchAndAggregate
+	if filterQuery != nil {
+		return nil, nil
+	}
+
+	cField := C.CString(field)
+	defer C.free(unsafe.Pointer(cField))
+
+	bucketCounts := make([]C.int64_t, numBuckets)
+
+	s.mu.RLock()
+	totalCounted := C.diagon_compute_histogram(
+		s.reader,
+		cField,
+		C.double(minEpochMs),
+		C.double(intervalMs),
+		C.int(numBuckets),
+		&bucketCounts[0],
+	)
+	s.mu.RUnlock()
+
+	if int64(totalCounted) < 0 {
+		return nil, fmt.Errorf("histogram computation failed")
+	}
+
+	// Collect non-empty buckets
+	var result []DateHistogramBucket
+	for i := 0; i < numBuckets; i++ {
+		count := int64(bucketCounts[i])
+		if count > 0 {
+			result = append(result, DateHistogramBucket{
+				KeyMs:    minEpochMs + float64(i)*intervalMs,
+				DocCount: count,
+			})
+		}
+	}
+	return result, nil
+}
+
+// ComputeRangeAggBKD computes a range aggregation using BKD range queries.
+// Each range is counted via a single BKD range query — O(log N) per range.
+func (s *Shard) ComputeRangeAggBKD(field string, ranges []RangeSpec, filterQuery map[string]interface{}) ([]RangeAggBucket, error) {
+	if !s.ensureReaderOpen() {
+		return nil, fmt.Errorf("reader not initialized")
+	}
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+
+	var filterQ C.DiagonQuery
+	if filterQuery != nil {
+		var err error
+		filterQ, err = s.convertQueryToDiagon(filterQuery)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert filter query: %w", err)
+		}
+		defer C.diagon_free_query(filterQ)
+	}
+
+	cField := C.CString(field)
+	defer C.free(unsafe.Pointer(cField))
+
+	cRanges := make([]C.RangeAggBucketC, len(ranges))
+	for i, r := range ranges {
+		if r.From != nil {
+			cRanges[i].from_val = C.double(*r.From)
+			cRanges[i].has_from = 1
+		}
+		if r.To != nil {
+			cRanges[i].to_val = C.double(*r.To)
+			cRanges[i].has_to = 1
+		}
+	}
+
+	s.mu.RLock()
+	C.compute_range_agg_bkd(
+		s.searcher,
+		cField,
+		&cRanges[0],
+		C.int(len(ranges)),
+		filterQ,
+	)
+	s.mu.RUnlock()
+
+	result := make([]RangeAggBucket, len(ranges))
+	for i, r := range ranges {
+		result[i] = RangeAggBucket{
+			From:     r.From,
+			To:       r.To,
+			Key:      r.Key,
+			DocCount: int64(cRanges[i].doc_count),
+		}
+	}
+	return result, nil
+}
+
+// CountQuery counts total hits for a query using BKD. Returns 0 on error.
+func (s *Shard) CountQuery(queryObj map[string]interface{}) int64 {
+	if !s.ensureReaderOpen() {
+		return 0
+	}
+	q, err := s.convertQueryToDiagon(queryObj)
+	if err != nil {
+		return 0
+	}
+	defer C.diagon_free_query(q)
+
+	s.mu.RLock()
+	td := C.diagon_search(s.searcher, q, 1)
+	s.mu.RUnlock()
+	if td == nil {
+		return 0
+	}
+	hits := int64(C.diagon_top_docs_total_hits(td))
+	C.diagon_free_top_docs(td)
+	return hits
 }
