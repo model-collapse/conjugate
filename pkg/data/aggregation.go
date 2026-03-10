@@ -56,8 +56,12 @@ func computeSingleDataNodeAgg(hits []*diagon.Hit, aggType string, body map[strin
 		return computeTermsAggData(hits, field, body, subAggsMap)
 	case "date_histogram":
 		return computeDateHistogramAggData(hits, field, body, subAggsMap)
+	case "auto_date_histogram":
+		return computeAutoDateHistogramAggData(hits, field, body, subAggsMap)
 	case "histogram":
 		return computeHistogramAggData(hits, field, body)
+	case "range":
+		return computeRangeAggDataWithSubs(hits, field, body, subAggsMap)
 	case "avg":
 		return computeAvgAggData(hits, field)
 	case "sum":
@@ -786,6 +790,8 @@ func computeSingleAggFromDocValues(docs []diagon.AggDocValues, aggType string, b
 		return computeTermsAggDocValues(docs, field, body, subAggsMap)
 	case "date_histogram":
 		return computeDateHistogramAggDocValues(docs, field, body, subAggsMap)
+	case "auto_date_histogram":
+		return computeAutoDateHistogramAggDocValues(docs, field, body, subAggsMap)
 	case "avg":
 		return computeNumericAggDocValues(docs, field, "avg")
 	case "sum":
@@ -813,7 +819,7 @@ func computeSingleAggFromDocValues(docs []diagon.AggDocValues, aggType string, b
 		}
 		return &pb.AggregationResult{Type: "cardinality", Value: int64(len(unique))}
 	case "range":
-		return computeRangeAggDocValues(docs, field, body)
+		return computeRangeAggDocValues(docs, field, body, subAggsMap)
 	case "composite":
 		return computeCompositeAggDocValues(docs, body)
 	case "multi_terms":
@@ -990,13 +996,59 @@ func computeRangeAggData(hits []*diagon.Hit, field string, body map[string]inter
 	return &pb.AggregationResult{Type: "range", Buckets: buckets}
 }
 
-func computeRangeAggDocValues(docs []diagon.AggDocValues, field string, body map[string]interface{}) *pb.AggregationResult {
+func computeRangeAggDataWithSubs(hits []*diagon.Hit, field string, body map[string]interface{}, subAggsMap map[string]interface{}) *pb.AggregationResult {
 	ranges := parseRanges(body)
 	if len(ranges) == 0 {
 		return nil
 	}
 
 	buckets := make([]*pb.AggregationBucket, len(ranges))
+	bucketHits := make([]([]*diagon.Hit), len(ranges))
+	for i, r := range ranges {
+		buckets[i] = &pb.AggregationBucket{Key: r.key}
+		if r.hasFrom {
+			from := r.from
+			buckets[i].From = &from
+		}
+		if r.hasTo {
+			to := r.to
+			buckets[i].To = &to
+		}
+	}
+
+	for _, hit := range hits {
+		val := resolveField(hit.Source, field)
+		f, ok := toFloat64Data(val)
+		if !ok {
+			continue
+		}
+		for i, r := range ranges {
+			if r.contains(f) {
+				buckets[i].DocCount++
+				if len(subAggsMap) > 0 {
+					bucketHits[i] = append(bucketHits[i], hit)
+				}
+			}
+		}
+	}
+
+	if len(subAggsMap) > 0 {
+		for i, bucket := range buckets {
+			bucket.SubAggregations = computeDataNodeAggregations(bucketHits[i], subAggsMap)
+		}
+	}
+
+	return &pb.AggregationResult{Type: "range", Buckets: buckets}
+}
+
+func computeRangeAggDocValues(docs []diagon.AggDocValues, field string, body map[string]interface{}, subAggsMap map[string]interface{}) *pb.AggregationResult {
+	ranges := parseRanges(body)
+	if len(ranges) == 0 {
+		return nil
+	}
+
+	buckets := make([]*pb.AggregationBucket, len(ranges))
+	bucketDocs := make([][]diagon.AggDocValues, len(ranges))
 	for i, r := range ranges {
 		buckets[i] = &pb.AggregationBucket{Key: r.key}
 		if r.hasFrom {
@@ -1021,7 +1073,16 @@ func computeRangeAggDocValues(docs []diagon.AggDocValues, field string, body map
 		for i, r := range ranges {
 			if r.contains(f) {
 				buckets[i].DocCount++
+				if len(subAggsMap) > 0 {
+					bucketDocs[i] = append(bucketDocs[i], doc)
+				}
 			}
+		}
+	}
+
+	if len(subAggsMap) > 0 {
+		for i, bucket := range buckets {
+			bucket.SubAggregations = computeAggregationsFromDocValues(bucketDocs[i], subAggsMap)
 		}
 	}
 

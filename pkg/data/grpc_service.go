@@ -890,7 +890,7 @@ func convertAggregations(aggs map[string]diagon.AggregationResult) map[string]*p
 
 		// Convert based on aggregation type
 		switch agg.Type {
-		case "terms", "histogram", "date_histogram", "range", "filters":
+		case "terms", "histogram", "date_histogram", "range", "filters", "auto_date_histogram":
 			// Bucket aggregations
 			pbAgg.Buckets = convertBuckets(agg.Buckets)
 
