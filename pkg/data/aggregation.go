@@ -578,6 +578,206 @@ func computeAggregationsFromDocValues(docs []diagon.AggDocValues, aggsMap map[st
 	return results
 }
 
+// computeAggregationsFromColumns computes aggregations directly from column cache data
+// (map[field][]string) without building intermediate AggDocValues structs.
+// This avoids ~90GB memory overhead for 116M docs by iterating column arrays directly.
+func computeAggregationsFromColumns(columnData map[string][]string, numDocs int, aggsMap map[string]interface{}) map[string]*pb.AggregationResult {
+	results := make(map[string]*pb.AggregationResult)
+
+	for name, aggDef := range aggsMap {
+		aggDefMap, ok := aggDef.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		for aggType, aggBody := range aggDefMap {
+			if aggType == "aggs" {
+				continue
+			}
+			bodyMap, ok := aggBody.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			result := computeSingleAggFromColumns(columnData, numDocs, aggType, bodyMap)
+			if result != nil {
+				results[name] = result
+			}
+		}
+	}
+
+	return results
+}
+
+func computeSingleAggFromColumns(columnData map[string][]string, numDocs int, aggType string, body map[string]interface{}) *pb.AggregationResult {
+	field, _ := body["field"].(string)
+	vals := columnData[field]
+	if vals == nil {
+		return nil
+	}
+
+	switch aggType {
+	case "terms":
+		return computeTermsAggFromColumn(vals, numDocs, body)
+	case "date_histogram":
+		return computeDateHistogramFromColumn(vals, numDocs, body)
+	case "avg", "sum", "min", "max", "stats":
+		return computeNumericAggFromColumn(vals, numDocs, aggType)
+	case "value_count":
+		var count int64
+		for _, v := range vals {
+			if v != "" {
+				count++
+			}
+		}
+		return &pb.AggregationResult{Type: "value_count", Count: count}
+	case "cardinality":
+		uniq := make(map[string]struct{})
+		for _, v := range vals {
+			if v != "" {
+				uniq[v] = struct{}{}
+			}
+		}
+		return &pb.AggregationResult{Type: "cardinality", Count: int64(len(uniq))}
+	}
+	return nil
+}
+
+func computeTermsAggFromColumn(vals []string, numDocs int, body map[string]interface{}) *pb.AggregationResult {
+	size := 10
+	if s, ok := body["size"].(float64); ok {
+		size = int(s)
+	}
+
+	counts := make(map[string]int64)
+	for _, v := range vals {
+		if v != "" {
+			counts[v]++
+		}
+	}
+
+	type kv struct {
+		key   string
+		count int64
+	}
+	sorted := make([]kv, 0, len(counts))
+	for k, c := range counts {
+		sorted = append(sorted, kv{k, c})
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].count > sorted[j].count })
+	if len(sorted) > size {
+		sorted = sorted[:size]
+	}
+
+	buckets := make([]*pb.AggregationBucket, len(sorted))
+	for i, kv := range sorted {
+		buckets[i] = &pb.AggregationBucket{Key: kv.key, DocCount: kv.count}
+	}
+	return &pb.AggregationResult{Type: "terms", Buckets: buckets}
+}
+
+func computeDateHistogramFromColumn(vals []string, numDocs int, body map[string]interface{}) *pb.AggregationResult {
+	interval := "1h"
+	if v, ok := body["calendar_interval"].(string); ok {
+		interval = v
+	} else if v, ok := body["fixed_interval"].(string); ok {
+		interval = v
+	} else if v, ok := body["interval"].(string); ok {
+		interval = v
+	}
+	duration := parseIntervalData(interval)
+
+	type bucketData struct {
+		key   time.Time
+		count int64
+	}
+	bucketMap := make(map[int64]*bucketData)
+
+	for _, v := range vals {
+		if v == "" {
+			continue
+		}
+		ts, err := tryParseTimeData(v)
+		if err != nil {
+			continue
+		}
+		bucketTime := truncateToIntervalData(ts, duration)
+		bucketKey := bucketTime.UnixMilli()
+		if bd, ok := bucketMap[bucketKey]; ok {
+			bd.count++
+		} else {
+			bucketMap[bucketKey] = &bucketData{key: bucketTime, count: 1}
+		}
+	}
+
+	keys := make([]int64, 0, len(bucketMap))
+	for k := range bucketMap {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+
+	buckets := make([]*pb.AggregationBucket, len(keys))
+	for i, k := range keys {
+		bd := bucketMap[k]
+		buckets[i] = &pb.AggregationBucket{
+			Key:        bd.key.Format(time.RFC3339),
+			NumericKey: float64(bd.key.UnixMilli()),
+			DocCount:   bd.count,
+		}
+	}
+	return &pb.AggregationResult{Type: "date_histogram", Buckets: buckets}
+}
+
+func computeNumericAggFromColumn(vals []string, numDocs int, aggType string) *pb.AggregationResult {
+	var sum, min, max float64
+	count := 0
+	min = math.MaxFloat64
+	max = -math.MaxFloat64
+
+	for _, v := range vals {
+		if v == "" {
+			continue
+		}
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			continue
+		}
+		sum += f
+		count++
+		if f < min {
+			min = f
+		}
+		if f > max {
+			max = f
+		}
+	}
+
+	if count == 0 {
+		return &pb.AggregationResult{Type: aggType}
+	}
+
+	switch aggType {
+	case "avg":
+		return &pb.AggregationResult{Type: "avg", Avg: sum / float64(count), Count: int64(count)}
+	case "sum":
+		return &pb.AggregationResult{Type: "sum", Sum: sum, Count: int64(count)}
+	case "min":
+		return &pb.AggregationResult{Type: "min", Min: min, Count: int64(count)}
+	case "max":
+		return &pb.AggregationResult{Type: "max", Max: max, Count: int64(count)}
+	case "stats":
+		return &pb.AggregationResult{
+			Type:  "stats",
+			Count: int64(count),
+			Min:   min,
+			Max:   max,
+			Avg:   sum / float64(count),
+			Sum:   sum,
+		}
+	}
+	return nil
+}
+
 func computeSingleAggFromDocValues(docs []diagon.AggDocValues, aggType string, body map[string]interface{}, subAggsMap map[string]interface{}) *pb.AggregationResult {
 	field, _ := body["field"].(string)
 

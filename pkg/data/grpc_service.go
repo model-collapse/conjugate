@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	json "github.com/goccy/go-json"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,12 +42,24 @@ func clearMap(m map[string]interface{}) {
 	}
 }
 
+// searchCacheEntry stores cached search results at the data node level.
+// This makes warm queries instant (<1ms) regardless of query type.
+// TTL matches the reader refresh interval (30s) so cache is naturally
+// invalidated when new documents arrive.
+type searchCacheEntry struct {
+	result  *diagon.SearchResult
+	created time.Time
+}
+
+const searchCacheTTL = 30 * time.Second
+
 // DataService implements the gRPC DataService
 type DataService struct {
 	pb.UnimplementedDataServiceServer
-	node     *DataNode
-	logger   *zap.Logger
-	aggCache sync.Map // map[string]*aggCacheEntry
+	node        *DataNode
+	logger      *zap.Logger
+	aggCache    sync.Map // map[string]*aggCacheEntry
+	searchCache sync.Map // map[string]*searchCacheEntry
 }
 
 // NewDataService creates a new data service
@@ -55,6 +68,23 @@ func NewDataService(node *DataNode, logger *zap.Logger) *DataService {
 		node:   node,
 		logger: logger,
 	}
+}
+
+// searchCacheKey generates a cache key for search results.
+func searchCacheKey(index string, queryBytes []byte, maxResults int, sort []string) string {
+	// Build key: index + query + size + sort (deterministic)
+	buf := make([]byte, 0, len(index)+len(queryBytes)+32)
+	buf = append(buf, index...)
+	buf = append(buf, ':')
+	buf = append(buf, queryBytes...)
+	buf = append(buf, ':')
+	buf = strconv.AppendInt(buf, int64(maxResults), 10)
+	for _, s := range sort {
+		buf = append(buf, ':')
+		buf = append(buf, s...)
+	}
+	h := sha256.Sum256(buf)
+	return hex.EncodeToString(h[:])
 }
 
 // aggCacheKey generates a cache key from index + query + aggs
@@ -448,8 +478,9 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 	maxResults := int(req.Size)
 	if maxResults <= 0 {
 		if len(aggsMap) > 0 {
-			// Aggregation query: need ALL matching docs to compute aggregations locally
-			maxResults = 200000
+			// Aggregation query: scan ALL docs to compute correct aggregation results.
+			// Pass 0 to DirectAggScan/SearchAndAggregate to mean "all docs".
+			maxResults = 0
 		} else {
 			maxResults = 100
 		}
@@ -508,22 +539,23 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 			isMatchAll = true
 		}
 
-		if len(aggsMap) > 0 && maxResults > 100 {
+		if len(aggsMap) > 0 && (maxResults == 0 || maxResults > 100) {
 			aggFields := extractAggregationFields(aggsMap)
 
 			if isMatchAll {
-				// match_all + aggs: use DirectAggScan to avoid O(totalDocs) diagon_search.
-				// Scans first maxResults docs by doc ID: O(maxResults) instead of O(totalDocs).
-				totalHits, aggDocs, scanErr := shard.DiagonShard.DirectAggScan(aggFields, maxResults)
+				// match_all + aggs: compute aggregations directly from column cache.
+				// Uses DirectAggColumns to get raw column data, then computes aggs
+				// without building per-doc AggDocValues (saves ~90GB for 116M docs).
+				totalHits, columnData, numDocs, scanErr := shard.DiagonShard.DirectAggColumns(aggFields)
 				if scanErr != nil {
-					s.logger.Error("DirectAggScan failed", zap.Error(scanErr))
+					s.logger.Error("DirectAggColumns failed", zap.Error(scanErr))
 					return nil, status.Errorf(codes.Internal, "direct agg scan failed: %v", scanErr)
 				}
 				result = &diagon.SearchResult{
 					TotalHits: totalHits,
 				}
-				if len(aggDocs) > 0 {
-					aggregations = computeAggregationsFromDocValues(aggDocs, aggsMap)
+				if numDocs > 0 && len(columnData) > 0 {
+					aggregations = computeAggregationsFromColumns(columnData, numDocs, aggsMap)
 				}
 			} else {
 				// Filtered agg query: need diagon_search to apply filter
@@ -550,48 +582,58 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 				aggregations = computeDataNodeAggregations(result.Hits, aggsMap)
 			}
 		} else {
-			// Optimization: for bool queries with range + non-range clauses,
-			// execute the non-range part via Diagon (fast inverted index) and
-			// post-filter by range in Go. Avoids O(N) doc values scan when
-			// the non-range clause is selective.
-			var queryMap map[string]interface{}
-			_ = json.Unmarshal(queryBytes, &queryMap)
-			if queryMap != nil {
-				rf, modifiedQuery := extractRangeFromBool(queryMap)
-				if rf != nil && modifiedQuery != nil {
-					// Execute non-range query via Diagon
-					// Request more results to account for post-filter reduction.
-					// Larger expandedMax covers more selective range filters at the
-					// cost of slightly more doc extraction (7µs/doc). The Diagon
-					// search itself always scores ALL matching docs regardless of
-					// limit, so the marginal cost is only in extraction.
-					expandedMax := maxResults * 20
-					if expandedMax < 1000 {
-						expandedMax = 1000
-					}
-					result, err = shard.Search(ctx, modifiedQuery, expandedMax, req.Sort)
-					if err != nil {
-						s.logger.Error("Search failed (range-split)", zap.Error(err))
-						return nil, status.Errorf(codes.Internal, "search failed: %v", err)
-					}
-					// Post-filter hits by range bounds in Go
-					if len(result.Hits) > 0 {
-						result.Hits = postFilterByRange(result.Hits, rf)
-						result.TotalHits = int64(len(result.Hits))
-					}
-					// Trim to requested size
-					if len(result.Hits) > maxResults {
-						result.Hits = result.Hits[:maxResults]
-					}
+			// Check search result cache first (makes ALL warm queries <1ms)
+			sCacheKey := searchCacheKey(req.IndexName, queryBytes, maxResults, req.Sort)
+			if cached, ok := s.searchCache.Load(sCacheKey); ok {
+				entry := cached.(*searchCacheEntry)
+				if time.Since(entry.created) < searchCacheTTL {
+					result = entry.result
 				}
 			}
-			// Fall through to standard search if range-split didn't apply
+
 			if result == nil {
-				result, err = shard.Search(ctx, queryBytes, maxResults, req.Sort)
-				if err != nil {
-					s.logger.Error("Search failed", zap.Error(err))
-					return nil, status.Errorf(codes.Internal, "search failed: %v", err)
+				var queryMap map[string]interface{}
+				_ = json.Unmarshal(queryBytes, &queryMap)
+
+				// Compound range optimization: bool queries with range + non-range clauses.
+				// Execute non-range part via Diagon, post-filter by range in Go.
+				// This turns "keyword+range" queries from O(N) range scan to O(K) term lookup.
+				if queryMap != nil {
+					rf, modifiedQuery := extractRangeFromBool(queryMap)
+					if rf != nil && modifiedQuery != nil {
+						expandedMax := maxResults * 20
+						if expandedMax < 1000 {
+							expandedMax = 1000
+						}
+						result, err = shard.Search(ctx, modifiedQuery, expandedMax, req.Sort)
+						if err != nil {
+							s.logger.Error("Search failed (range-split)", zap.Error(err))
+							return nil, status.Errorf(codes.Internal, "search failed: %v", err)
+						}
+						if len(result.Hits) > 0 {
+							result.Hits = postFilterByRange(result.Hits, rf)
+							result.TotalHits = int64(len(result.Hits))
+						}
+						if len(result.Hits) > maxResults {
+							result.Hits = result.Hits[:maxResults]
+						}
+					}
 				}
+
+				// Standard Diagon search (handles all query types including range)
+				if result == nil {
+					result, err = shard.Search(ctx, queryBytes, maxResults, req.Sort)
+					if err != nil {
+						s.logger.Error("Search failed", zap.Error(err))
+						return nil, status.Errorf(codes.Internal, "search failed: %v", err)
+					}
+				}
+
+				// Store in search result cache
+				s.searchCache.Store(sCacheKey, &searchCacheEntry{
+					result:  result,
+					created: time.Now(),
+				})
 			}
 		}
 	}
@@ -686,15 +728,41 @@ func (s *DataService) Count(ctx context.Context, req *pb.CountRequest) (*pb.Coun
 		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
 	}
 
-	// For now, return document count
-	// TODO: Implement query-based counting
-	_ = req.Query
+	// If no query or match_all, return total doc count
+	if len(req.Query) == 0 {
+		stats := shard.Stats()
+		return &pb.CountResponse{Count: stats.DocsCount}, nil
+	}
 
-	stats := shard.Stats()
+	// Extract the inner query from wrapped format {"query": <inner>}.
+	// The coordination node sends the raw HTTP body which wraps the query.
+	// The data node's Search handler (and bridge) expects the inner query directly.
+	queryBytes := req.Query
+	var wrappedQuery map[string]interface{}
+	if err := json.Unmarshal(req.Query, &wrappedQuery); err == nil {
+		if q, ok := wrappedQuery["query"]; ok {
+			if qMap, ok := q.(map[string]interface{}); ok {
+				if _, isMatchAll := qMap["match_all"]; isMatchAll {
+					stats := shard.Stats()
+					return &pb.CountResponse{Count: stats.DocsCount}, nil
+				}
+				// Extract inner query for Diagon
+				queryBytes, _ = json.Marshal(qMap)
+			}
+		} else {
+			// No explicit "query" key means match_all
+			stats := shard.Stats()
+			return &pb.CountResponse{Count: stats.DocsCount}, nil
+		}
+	}
 
-	return &pb.CountResponse{
-		Count: stats.DocsCount,
-	}, nil
+	// Execute search with size=1 to get TotalHits count
+	result, err := shard.Search(ctx, queryBytes, 1, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "count query failed: %v", err)
+	}
+
+	return &pb.CountResponse{Count: result.TotalHits}, nil
 }
 
 // GetShardStats returns statistics for a specific shard
@@ -1351,3 +1419,4 @@ func getNestedField(m map[string]interface{}, parts []string) interface{} {
 	}
 	return current
 }
+

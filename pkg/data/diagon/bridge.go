@@ -338,6 +338,51 @@ static int batch_scan_field_values(
     return valid_docs;
 }
 
+// batch_scan_field_values_from scans sequential doc IDs starting from start_doc_id,
+// extracting up to max_docs stored field values. Returns number of valid docs scanned.
+// Sets *next_doc_id to the doc ID to resume from on the next call (-1 if done).
+static int batch_scan_field_values_from(
+    DiagonIndexReader reader,
+    const char* field_name,
+    char* out_buf,
+    int buf_size,
+    int* out_lengths,
+    int max_docs,
+    int start_doc_id,
+    int* next_doc_id)
+{
+    int max_doc_id = (int)diagon_reader_max_doc(reader);
+    if (max_doc_id <= 0) { *next_doc_id = -1; return 0; }
+
+    int offset = 0;
+    char tmp[4096];
+    int valid_docs = 0;
+    int doc_id;
+
+    for (doc_id = start_doc_id; doc_id < max_doc_id && valid_docs < max_docs; doc_id++) {
+        DiagonDocument doc = diagon_reader_get_document(reader, doc_id);
+        if (!doc) continue;
+
+        out_lengths[valid_docs] = 0;
+        if (diagon_document_get_field_value(doc, field_name, tmp, sizeof(tmp))) {
+            int len = (int)strlen(tmp);
+            if (offset + len + 1 <= buf_size) {
+                memcpy(out_buf + offset, tmp, len + 1);
+                out_lengths[valid_docs] = len;
+                offset += len + 1;
+            }
+        }
+        diagon_free_document(doc);
+        valid_docs++;
+    }
+
+    *next_doc_id = (doc_id < max_doc_id) ? doc_id : -1;
+    return valid_docs;
+}
+
+// (batch_scan_numeric_values removed: stored-field scan is O(N*7µs) = ~800s for 116M docs,
+// making it slower than the C++ range query path which uses NumericDocValues column store)
+
 // CStringArena: memory arena for batched CString allocations.
 // Reduces malloc/free overhead from ~80,000 calls to 1 per 5K-doc batch.
 typedef struct {
@@ -650,6 +695,7 @@ type Shard struct {
 	columnCache   map[string][]string // field -> values for docs 0..N
 	columnCacheMu sync.RWMutex
 	columnCacheN  int // number of docs in cache (all columns same length)
+
 }
 
 // isKeywordLike returns true if a string value looks like a keyword (enum/identifier)
@@ -762,9 +808,12 @@ func (s *Shard) IndexDocument(docID string, doc map[string]interface{}) error {
 			// uses bit_cast<int64>(double) which corrupts the value. Double range
 			// query compares doubles directly, which works for epoch millis.
 			if epochMs, isDate := tryParseDateToEpochMs(v); isDate {
-				// Index as double for range queries
+				// Index as double for range queries (doc values for sort/agg)
 				doubleField := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(epochMs)))
 				C.diagon_document_add_field(diagonDoc, doubleField)
+				// Also add BKD point field for O(log N) range queries
+				pointField := C.diagon_create_double_point_field(cFieldName, C.double(float64(epochMs)))
+				C.diagon_document_add_field(diagonDoc, pointField)
 				// Also store the original string value
 				cValue := C.CString(v)
 				defer C.free(unsafe.Pointer(cValue))
@@ -806,6 +855,8 @@ func (s *Shard) IndexDocument(docID string, doc map[string]interface{}) error {
 			}
 			field := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(val)))
 			C.diagon_document_add_field(diagonDoc, field)
+			pointField := C.diagon_create_double_point_field(cFieldName, C.double(float64(val)))
+			C.diagon_document_add_field(diagonDoc, pointField)
 
 			cValueStr := C.CString(fmt.Sprintf("%d", val))
 			defer C.free(unsafe.Pointer(cValueStr))
@@ -822,6 +873,8 @@ func (s *Shard) IndexDocument(docID string, doc map[string]interface{}) error {
 			}
 			field := C.diagon_create_indexed_double_field(cFieldName, C.double(val))
 			C.diagon_document_add_field(diagonDoc, field)
+			pointField := C.diagon_create_double_point_field(cFieldName, C.double(val))
+			C.diagon_document_add_field(diagonDoc, pointField)
 
 			cValueStr := C.CString(fmt.Sprintf("%f", val))
 			defer C.free(unsafe.Pointer(cValueStr))
@@ -991,6 +1044,8 @@ func processDocChunk(docs []struct {
 				if epochMs, isDate := tryParseDateToEpochMs(v); isDate {
 					doubleField := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(epochMs)))
 					C.diagon_document_add_field(diagonDoc, doubleField)
+					pointField := C.diagon_create_double_point_field(cFieldName, C.double(float64(epochMs)))
+					C.diagon_document_add_field(diagonDoc, pointField)
 					cValue, inArena := arenaAllocCString(arena, v)
 					if !inArena {
 						fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cValue))
@@ -1033,6 +1088,8 @@ func processDocChunk(docs []struct {
 				}
 				field := C.diagon_create_indexed_double_field(cFieldName, C.double(float64(val)))
 				C.diagon_document_add_field(diagonDoc, field)
+				pointField := C.diagon_create_double_point_field(cFieldName, C.double(float64(val)))
+				C.diagon_document_add_field(diagonDoc, pointField)
 				cValueStr, inArena := arenaAllocCString(arena, strconv.FormatInt(val, 10))
 				if !inArena {
 					fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cValueStr))
@@ -1050,6 +1107,8 @@ func processDocChunk(docs []struct {
 				}
 				field := C.diagon_create_indexed_double_field(cFieldName, C.double(val))
 				C.diagon_document_add_field(diagonDoc, field)
+				pointField := C.diagon_create_double_point_field(cFieldName, C.double(val))
+				C.diagon_document_add_field(diagonDoc, pointField)
 				cValueStr, inArena := arenaAllocCString(arena, strconv.FormatFloat(val, 'f', 6, 64))
 				if !inArena {
 					fallbackPtrs = append(fallbackPtrs, unsafe.Pointer(cValueStr))
@@ -2087,9 +2146,7 @@ type AggDocValues struct {
 // Returns (totalHits, fieldValues-per-doc) without building full Hit objects.
 // Uses batch C extraction (single CGO call for all docs) to eliminate per-doc CGO overhead.
 func (s *Shard) SearchAndAggregate(query []byte, maxResults int, fields []string) (int64, []AggDocValues, error) {
-	if maxResults <= 0 {
-		maxResults = 200000
-	}
+	// maxResults <= 0 means "all matching docs" — resolved after reader open
 
 	// Fast path: check under RLock if reader is already open
 	s.mu.RLock()
@@ -2120,6 +2177,17 @@ func (s *Shard) SearchAndAggregate(query []byte, maxResults int, fields []string
 		s.mu.Unlock()
 	}
 
+	// Resolve maxResults: 0 means "all docs"
+	if maxResults <= 0 {
+		s.mu.RLock()
+		if s.reader != nil {
+			maxResults = int(C.diagon_reader_max_doc(s.reader))
+		} else {
+			maxResults = 1000000 // fallback
+		}
+		s.mu.RUnlock()
+	}
+
 	// Parse query
 	var queryObj map[string]interface{}
 	if err := json.Unmarshal(query, &queryObj); err != nil {
@@ -2131,7 +2199,7 @@ func (s *Shard) SearchAndAggregate(query []byte, maxResults int, fields []string
 	}
 	defer C.diagon_free_query(diagonQuery)
 
-	// Execute search
+	// Execute search — collect all matching docs for aggregation
 	s.mu.RLock()
 	topDocs := C.diagon_search(s.searcher, diagonQuery, C.int(maxResults))
 	s.mu.RUnlock()
@@ -2250,9 +2318,7 @@ func (s *Shard) SearchAndAggregate(query []byte, maxResults int, fields []string
 // 3 CGO calls per doc per field) and an in-memory column cache to avoid
 // re-scanning on repeated queries. For match_all agg-only queries.
 func (s *Shard) DirectAggScan(fields []string, maxDocs int) (int64, []AggDocValues, error) {
-	if maxDocs <= 0 {
-		maxDocs = 200000
-	}
+	// maxDocs <= 0 means "scan all docs in shard" — resolved after reader open
 
 	// Ensure reader is open
 	s.mu.RLock()
@@ -2297,7 +2363,8 @@ func (s *Shard) DirectAggScan(fields []string, maxDocs int) (int64, []AggDocValu
 	maxDocID := int(C.diagon_reader_max_doc(s.reader))
 	s.mu.RUnlock()
 
-	if maxDocs > maxDocID {
+	// maxDocs <= 0 means "all docs" — resolve to actual doc count
+	if maxDocs <= 0 || maxDocs > maxDocID {
 		maxDocs = maxDocID
 	}
 
@@ -2337,44 +2404,61 @@ func (s *Shard) DirectAggScan(fields []string, maxDocs int) (int64, []AggDocValu
 	}
 	s.columnCacheMu.RUnlock()
 
-	// Batch extraction: 1 CGO call per field instead of 3*N per-doc calls.
-	// For 200K docs with 3 fields: 3 CGO calls vs ~1M.
-	bufSize := maxDocs * 128 // 128 bytes avg per field value
-	if bufSize < 65536 {
-		bufSize = 65536
+	// Chunked batch extraction: scan docs in chunks to avoid allocating huge buffers.
+	// Each chunk uses a fixed-size buffer (~64MB), then results are accumulated into
+	// pre-allocated column slices. For 116M docs this uses ~3GB for column cache
+	// (24 bytes/timestamp * 116M) vs ~15GB for a single monolithic buffer.
+	const chunkSize = 500000 // docs per chunk
+	chunkBufSize := chunkSize * 128
+	if chunkBufSize < 65536 {
+		chunkBufSize = 65536
 	}
 
-	// Extract each field with a single batch C call
+	// Pre-allocate column slices to full capacity
 	columnData := make(map[string][]string, len(fields))
-	var numDocs int
+	for _, f := range fields {
+		columnData[f] = make([]string, 0, maxDocs)
+	}
 
 	s.mu.RLock()
 	for _, field := range fields {
-		buf := make([]byte, bufSize)
-		lengths := make([]C.int, maxDocs)
+		buf := make([]byte, chunkBufSize)
+		lengths := make([]C.int, chunkSize)
 		cField := C.CString(field)
+		nextDocID := C.int(0)
 
-		n := int(C.batch_scan_field_values(
-			s.reader, cField,
-			(*C.char)(unsafe.Pointer(&buf[0])), C.int(bufSize),
-			&lengths[0], C.int(maxDocs)))
+		for nextDocID >= 0 {
+			var cNextDocID C.int
+			n := int(C.batch_scan_field_values_from(
+				s.reader, cField,
+				(*C.char)(unsafe.Pointer(&buf[0])), C.int(chunkBufSize),
+				&lengths[0], C.int(chunkSize),
+				nextDocID, &cNextDocID))
+
+			// Parse chunk into column slice
+			offset := 0
+			for i := 0; i < n; i++ {
+				l := int(lengths[i])
+				if l > 0 && offset+l <= len(buf) {
+					columnData[field] = append(columnData[field], string(buf[offset:offset+l]))
+					offset += l + 1
+				} else {
+					columnData[field] = append(columnData[field], "")
+				}
+			}
+			nextDocID = cNextDocID
+		}
 
 		C.free(unsafe.Pointer(cField))
-
-		// Parse concatenated buffer into string slice
-		vals := make([]string, n)
-		offset := 0
-		for i := 0; i < n; i++ {
-			l := int(lengths[i])
-			if l > 0 && offset+l <= len(buf) {
-				vals[i] = string(buf[offset : offset+l])
-				offset += l + 1 // +1 for null terminator
-			}
-		}
-		columnData[field] = vals
-		numDocs = n // all fields should return same doc count
 	}
 	s.mu.RUnlock()
+
+	// Determine actual doc count from first field
+	numDocs := 0
+	for _, vals := range columnData {
+		numDocs = len(vals)
+		break
+	}
 
 	// Store in column cache
 	s.columnCacheMu.Lock()
@@ -2403,6 +2487,138 @@ func (s *Shard) DirectAggScan(fields []string, maxDocs int) (int64, []AggDocValu
 	}
 
 	return totalDocs, docs, nil
+}
+
+// DirectAggColumns returns raw column data (map[field][]string) and total doc count
+// for computing aggregations directly without building per-doc AggDocValues structs.
+// This reduces memory from ~90GB (AggDocValues for 116M docs) to ~3GB (column cache).
+func (s *Shard) DirectAggColumns(fields []string) (int64, map[string][]string, int, error) {
+	// Ensure reader is open (same as DirectAggScan)
+	s.mu.RLock()
+	needReopen := s.readerDirty || s.reader == nil
+	s.mu.RUnlock()
+
+	if needReopen {
+		s.mu.Lock()
+		needReopen = s.readerDirty || s.reader == nil
+		if needReopen {
+			if s.readerDirty && s.writer != nil {
+				C.diagon_commit(s.writer)
+			}
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+				s.reader = nil
+			}
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader != nil {
+				s.searcher = C.diagon_create_index_searcher(s.reader)
+			}
+			s.readerDirty = false
+			s.columnCacheMu.Lock()
+			s.columnCache = nil
+			s.columnCacheN = 0
+			s.columnCacheMu.Unlock()
+		}
+		s.mu.Unlock()
+	}
+
+	s.mu.RLock()
+	if s.reader == nil {
+		s.mu.RUnlock()
+		return 0, nil, 0, fmt.Errorf("reader not initialized")
+	}
+	totalDocs := int64(C.diagon_reader_num_docs(s.reader))
+	maxDocID := int(C.diagon_reader_max_doc(s.reader))
+	s.mu.RUnlock()
+
+	if len(fields) == 0 {
+		return totalDocs, nil, 0, nil
+	}
+
+	// Check column cache
+	s.columnCacheMu.RLock()
+	allCached := s.columnCache != nil && s.columnCacheN > 0
+	if allCached {
+		for _, f := range fields {
+			if _, ok := s.columnCache[f]; !ok {
+				allCached = false
+				break
+			}
+		}
+	}
+	if allCached {
+		columnData := make(map[string][]string, len(fields))
+		for _, f := range fields {
+			columnData[f] = s.columnCache[f]
+		}
+		n := s.columnCacheN
+		s.columnCacheMu.RUnlock()
+		return totalDocs, columnData, n, nil
+	}
+	s.columnCacheMu.RUnlock()
+
+	// Chunked batch extraction (same as DirectAggScan)
+	const chunkSize = 500000
+	chunkBufSize := chunkSize * 128
+
+	columnData := make(map[string][]string, len(fields))
+	for _, f := range fields {
+		columnData[f] = make([]string, 0, maxDocID)
+	}
+
+	s.mu.RLock()
+	for _, field := range fields {
+		buf := make([]byte, chunkBufSize)
+		lengths := make([]C.int, chunkSize)
+		cField := C.CString(field)
+		nextDocID := C.int(0)
+
+		for nextDocID >= 0 {
+			var cNextDocID C.int
+			n := int(C.batch_scan_field_values_from(
+				s.reader, cField,
+				(*C.char)(unsafe.Pointer(&buf[0])), C.int(chunkBufSize),
+				&lengths[0], C.int(chunkSize),
+				nextDocID, &cNextDocID))
+
+			offset := 0
+			for i := 0; i < n; i++ {
+				l := int(lengths[i])
+				if l > 0 && offset+l <= len(buf) {
+					columnData[field] = append(columnData[field], string(buf[offset:offset+l]))
+					offset += l + 1
+				} else {
+					columnData[field] = append(columnData[field], "")
+				}
+			}
+			nextDocID = cNextDocID
+		}
+		C.free(unsafe.Pointer(cField))
+	}
+	s.mu.RUnlock()
+
+	numDocs := 0
+	for _, vals := range columnData {
+		numDocs = len(vals)
+		break
+	}
+
+	// Store in column cache
+	s.columnCacheMu.Lock()
+	if s.columnCache == nil {
+		s.columnCache = make(map[string][]string, len(fields))
+	}
+	for f, vals := range columnData {
+		s.columnCache[f] = vals
+	}
+	s.columnCacheN = numDocs
+	s.columnCacheMu.Unlock()
+
+	return totalDocs, columnData, numDocs, nil
 }
 
 // DocCount returns the number of documents in the shard index.
