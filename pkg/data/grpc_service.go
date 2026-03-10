@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	pb "github.com/conjugate/conjugate/pkg/common/proto"
 	"github.com/conjugate/conjugate/pkg/data/diagon"
@@ -39,6 +40,22 @@ var docMapPool = sync.Pool{
 func clearMap(m map[string]interface{}) {
 	for k := range m {
 		delete(m, k)
+	}
+}
+
+// sanitizeUTF8Map recursively ensures all string values in a map are valid UTF-8.
+// Invalid bytes are replaced with the Unicode replacement character U+FFFD.
+// This prevents gRPC protobuf marshaling failures (proto3 requires valid UTF-8 strings).
+func sanitizeUTF8Map(m map[string]interface{}) {
+	for k, v := range m {
+		switch val := v.(type) {
+		case string:
+			if !utf8.ValidString(val) {
+				m[k] = strings.ToValidUTF8(val, "\uFFFD")
+			}
+		case map[string]interface{}:
+			sanitizeUTF8Map(val)
+		}
 	}
 }
 
@@ -673,6 +690,7 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 	if len(aggsMap) == 0 {
 		hits = make([]*pb.SearchHit, 0, len(result.Hits))
 		for _, hit := range result.Hits {
+			sanitizeUTF8Map(hit.Source)
 			docStruct, err := structpb.NewStruct(hit.Source)
 			if err != nil {
 				s.logger.Error("Failed to convert document", zap.Error(err))

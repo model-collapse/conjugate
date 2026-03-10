@@ -551,12 +551,14 @@ import "C"
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	json "github.com/goccy/go-json"
@@ -1641,56 +1643,40 @@ func (s *Shard) convertQueryToDiagon(queryObj map[string]interface{}) (C.DiagonQ
 			cField := C.CString(field)
 			defer C.free(unsafe.Pointer(cField))
 
-			s.logger.Debug(" Creating Diagon double range query",
+			s.logger.Debug(" Creating Diagon BKD point range query",
 				zap.String("field", field),
 				zap.Float64("lower", lowerValue),
 				zap.Float64("upper", upperValue),
 				zap.Bool("include_lower", includeLower),
 				zap.Bool("include_upper", includeUpper))
 
-			// Use double range query for correct comparison semantics.
-			// diagon_create_numeric_range_query uses bit_cast<int64_t>(double)
-			// which breaks for negative doubles (bit patterns don't sort as integers).
-			// diagon_create_double_range_query compares doubles directly.
-			rangeQ := C.diagon_create_double_range_query(
+			// Adjust bounds for exclusive endpoints.
+			// PointRangeQuery is always inclusive [lower, upper].
+			// For exclusive bounds, nudge the value by the smallest increment.
+			adjLower := lowerValue
+			adjUpper := upperValue
+			if !includeLower {
+				adjLower = nextDouble(lowerValue)
+			}
+			if !includeUpper {
+				adjUpper = prevDouble(upperValue)
+			}
+
+			// Use BKD tree-based PointRangeQuery — O(log N) per segment.
+			// Requires fields indexed with diagon_create_double_point_field.
+			// This replaces the old DoubleRangeQuery which did O(N) doc-values scan.
+			diagonQuery = C.diagon_create_double_point_range_query(
 				cField,
-				C.double(lowerValue),
-				C.double(upperValue),
-				C.bool(includeLower),
-				C.bool(includeUpper),
+				C.double(adjLower),
+				C.double(adjUpper),
 			)
 
-			if rangeQ == nil {
-				errMsg := C.GoString(C.diagon_last_error())
-				s.logger.Error("DEBUG: Failed to create Diagon double range query", zap.String("error", errMsg))
-				return nil, fmt.Errorf("failed to create double range query: %s", errMsg)
-			}
-
-			// Wrap range query in bool(must: match_all, filter: range) to exclude
-			// phantom documents. Diagon's doc values iteration returns default 0.0
-			// for documents without the field, causing false matches when the range
-			// includes 0.0. match_all restricts results to real documents only.
-			matchAllQ := C.diagon_create_match_all_query()
-			if matchAllQ == nil {
-				errMsg := C.GoString(C.diagon_last_error())
-				return nil, fmt.Errorf("failed to create match_all for range wrapper: %s", errMsg)
-			}
-
-			boolBuilder := C.diagon_create_bool_query()
-			if boolBuilder == nil {
-				errMsg := C.GoString(C.diagon_last_error())
-				return nil, fmt.Errorf("failed to create bool query for range wrapper: %s", errMsg)
-			}
-
-			C.diagon_bool_query_add_must(boolBuilder, matchAllQ)
-			C.diagon_bool_query_add_filter(boolBuilder, rangeQ)
-
-			diagonQuery = C.diagon_bool_query_build(boolBuilder)
 			if diagonQuery == nil {
 				errMsg := C.GoString(C.diagon_last_error())
-				return nil, fmt.Errorf("failed to build range wrapper bool query: %s", errMsg)
+				s.logger.Error("Failed to create BKD point range query", zap.String("error", errMsg))
+				return nil, fmt.Errorf("failed to create point range query: %s", errMsg)
 			}
-			s.logger.Debug(" Diagon double range query created successfully (wrapped with match_all)")
+			s.logger.Debug(" Diagon BKD point range query created successfully")
 			break // Only support single field for now
 		}
 	} else if boolQuery, ok := queryObj["bool"].(map[string]interface{}); ok {
@@ -1837,6 +1823,42 @@ func (s *Shard) SearchWithLimit(query []byte, filterExpression []byte, maxResult
 // internal doc IDs in chronologically-indexed data).
 func (s *Shard) SearchWithSort(query []byte, filterExpression []byte, maxResults int, sort []string) (*SearchResult, error) {
 	return s.searchInternal(query, filterExpression, maxResults, nil, sort)
+}
+
+// nextDouble returns the smallest double strictly greater than v.
+// Used to convert exclusive lower bounds to inclusive for BKD PointRangeQuery.
+func nextDouble(v float64) float64 {
+	if v != v { // NaN
+		return v
+	}
+	if v == 0 {
+		return math.SmallestNonzeroFloat64
+	}
+	bits := math.Float64bits(v)
+	if v > 0 {
+		bits++
+	} else {
+		bits--
+	}
+	return math.Float64frombits(bits)
+}
+
+// prevDouble returns the largest double strictly less than v.
+// Used to convert exclusive upper bounds to inclusive for BKD PointRangeQuery.
+func prevDouble(v float64) float64 {
+	if v != v { // NaN
+		return v
+	}
+	if v == 0 {
+		return -math.SmallestNonzeroFloat64
+	}
+	bits := math.Float64bits(v)
+	if v > 0 {
+		bits--
+	} else {
+		bits++
+	}
+	return math.Float64frombits(bits)
 }
 
 // isMatchAllQuery returns true if queryObj is a pure {"match_all": {}} with no
@@ -2887,12 +2909,18 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 		return nil, nil
 	}
 
-	buckets := make([]TermBucket, int(n))
+	buckets := make([]TermBucket, 0, int(n))
 	for i := 0; i < int(n); i++ {
-		buckets[i] = TermBucket{
-			Key:      C.GoString(&outBuckets[i].key[0]),
-			DocCount: int64(outBuckets[i].doc_count),
+		key := C.GoString(&outBuckets[i].key[0])
+		// Sanitize non-UTF-8 strings to prevent gRPC protobuf marshaling failures.
+		// Stored field values may contain arbitrary bytes from the C++ engine.
+		if !utf8.ValidString(key) {
+			continue
 		}
+		buckets = append(buckets, TermBucket{
+			Key:      key,
+			DocCount: int64(outBuckets[i].doc_count),
+		})
 	}
 
 	// Cache the result
