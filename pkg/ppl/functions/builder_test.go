@@ -78,8 +78,8 @@ func TestFunctionBuilder_CanBuildUDF(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "simple field reference",
-			expr: &ast.FieldReference{Name: "status"},
+			name:     "simple field reference",
+			expr:     &ast.FieldReference{Name: "status"},
 			expected: false,
 		},
 	}

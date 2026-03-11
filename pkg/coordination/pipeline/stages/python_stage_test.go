@@ -199,9 +199,9 @@ func TestPythonStage_Execute(t *testing.T) {
 		require.NoError(t, err)
 
 		result := output.(map[string]interface{})
-		assert.Equal(t, "modified title", result["title"])       // Overwritten
-		assert.Equal(t, "new value", result["new_field"])        // Added
-		assert.Equal(t, "value", result["existing"])             // Preserved
+		assert.Equal(t, "modified title", result["title"]) // Overwritten
+		assert.Equal(t, "new value", result["new_field"])  // Added
+		assert.Equal(t, "value", result["existing"])       // Preserved
 	})
 
 	t.Run("NumericResult", func(t *testing.T) {
@@ -323,8 +323,8 @@ func TestPythonStage_InputConversion(t *testing.T) {
 
 	t.Run("MapInput", func(t *testing.T) {
 		input := map[string]interface{}{
-			"title": "test document",
-			"_id":   "doc123",
+			"title":  "test document",
+			"_id":    "doc123",
 			"_score": 10.5,
 		}
 
@@ -419,7 +419,7 @@ func TestStageBuilder(t *testing.T) {
 				Name:    "stage1",
 				Type:    pipeline.StageTypePython,
 				Enabled: true,
-				Config: map[string]interface{}{
+				Config:  map[string]interface{}{
 					// Missing udf_name
 				},
 			},

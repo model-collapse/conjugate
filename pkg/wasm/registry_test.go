@@ -295,7 +295,7 @@ func TestUDFRegistryList(t *testing.T) {
 	for i := 1; i <= 2; i++ {
 		metadata := &UDFMetadata{
 			Name:         "test",
-			Version:      string(rune('0' + i)) + ".0.0",
+			Version:      string(rune('0'+i)) + ".0.0",
 			Description:  "Test",
 			FunctionName: "add",
 			WASMBytes:    addWasmBytes,

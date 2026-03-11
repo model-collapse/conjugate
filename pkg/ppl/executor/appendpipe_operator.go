@@ -16,23 +16,24 @@ import (
 // current results as input to the subsearch.
 //
 // Example:
-//   source=errors | stats count() by error_code
-//   | appendpipe [stats sum(count) as total]
+//
+//	source=errors | stats count() by error_code
+//	| appendpipe [stats sum(count) as total]
 //
 // This would add a summary row with the total count.
 type appendpipeOperator struct {
-	input           Operator
-	subsearchPlan   Operator // The subsearch pipeline (not yet opened)
-	logger          *zap.Logger
-	ctx             context.Context
-	stats           *IteratorStats
-	opened          bool
-	closed          bool
-	bufferedRows    []*Row     // Buffer all input rows
-	currentIndex    int        // Current position in buffer
-	subsearchOpened bool       // Whether subsearch has been opened
-	subsearchDone   bool       // Whether we've finished reading subsearch
-	readingSubsearch bool      // Whether we're currently reading subsearch
+	input            Operator
+	subsearchPlan    Operator // The subsearch pipeline (not yet opened)
+	logger           *zap.Logger
+	ctx              context.Context
+	stats            *IteratorStats
+	opened           bool
+	closed           bool
+	bufferedRows     []*Row // Buffer all input rows
+	currentIndex     int    // Current position in buffer
+	subsearchOpened  bool   // Whether subsearch has been opened
+	subsearchDone    bool   // Whether we've finished reading subsearch
+	readingSubsearch bool   // Whether we're currently reading subsearch
 }
 
 // NewAppendpipeOperator creates a new appendpipe operator

@@ -116,16 +116,16 @@ func (sm *ShardManager) CreateShard(ctx context.Context, indexName string, shard
 		analyzerCache:    NewAnalyzerCache(),        // Create analyzer cache
 
 		// Batch indexing configuration
-		pendingDocs:      0,
-		lastCommitTime:   time.Now(),
-		lastRefreshTime:  time.Now(),
-		commitBatchSize:  500000,             // Tuned: large batch for fewer segments during bulk indexing
-		commitInterval:   30 * time.Second,   // Tuned: commit every 30s for bulk throughput
-		refreshInterval:  30 * time.Second,   // Tuned: refresh every 30s for bulk throughput
-		stopCommitter:    make(chan struct{}),
-		stopRefresher:    make(chan struct{}),
-		needsCommit:       false,
-		needsRefresh:      false,
+		pendingDocs:     0,
+		lastCommitTime:  time.Now(),
+		lastRefreshTime: time.Now(),
+		commitBatchSize: 500000,           // Tuned: large batch for fewer segments during bulk indexing
+		commitInterval:  30 * time.Second, // Tuned: commit every 30s for bulk throughput
+		refreshInterval: 30 * time.Second, // Tuned: refresh every 30s for bulk throughput
+		stopCommitter:   make(chan struct{}),
+		stopRefresher:   make(chan struct{}),
+		needsCommit:     false,
+		needsRefresh:    false,
 	}
 
 	// Start background committer and refresher
@@ -308,16 +308,16 @@ func (sm *ShardManager) loadShards() error {
 				analyzerCache:    NewAnalyzerCache(),        // Create analyzer cache
 
 				// Batch indexing configuration
-				pendingDocs:      0,
-				lastCommitTime:   time.Now(),
-				lastRefreshTime:  time.Now(),
-				commitBatchSize:  500000,             // Tuned: large batch for fewer segments during bulk indexing
-				commitInterval:   30 * time.Second,   // Tuned: commit every 30s for bulk throughput
-				refreshInterval:  30 * time.Second,   // Tuned: refresh every 30s for bulk throughput
-				stopCommitter:     make(chan struct{}),
-				stopRefresher:     make(chan struct{}),
-				needsCommit:       false,
-				needsRefresh:      false,
+				pendingDocs:     0,
+				lastCommitTime:  time.Now(),
+				lastRefreshTime: time.Now(),
+				commitBatchSize: 500000,           // Tuned: large batch for fewer segments during bulk indexing
+				commitInterval:  30 * time.Second, // Tuned: commit every 30s for bulk throughput
+				refreshInterval: 30 * time.Second, // Tuned: refresh every 30s for bulk throughput
+				stopCommitter:   make(chan struct{}),
+				stopRefresher:   make(chan struct{}),
+				needsCommit:     false,
+				needsRefresh:    false,
 			}
 
 			// Start background committer and refresher
@@ -375,19 +375,19 @@ type Shard struct {
 	analyzerCache    *AnalyzerCache    // Cached analyzer instances
 
 	// Batch indexing optimization
-	pendingDocs       int
-	lastCommitTime    time.Time
-	lastRefreshTime   time.Time
-	commitBatchSize   int           // Number of docs before auto-commit (default: 1000)
-	commitInterval    time.Duration // Time before auto-commit (default: 1s)
-	refreshInterval   time.Duration // Time before auto-refresh (default: 1s)
-	commitTicker      *time.Ticker  // Background commit ticker
-	refreshTicker     *time.Ticker  // Background refresh ticker
-	stopCommitter     chan struct{} // Signal to stop background committer
-	stopRefresher     chan struct{} // Signal to stop background refresher
-	needsCommit       bool          // Flag indicating pending changes need commit
-	needsRefresh      bool          // Flag indicating committed changes need refresh
-	commitInProgress  bool          // Guard: true while C++ Commit is running (prevents goroutine pile-up)
+	pendingDocs      int
+	lastCommitTime   time.Time
+	lastRefreshTime  time.Time
+	commitBatchSize  int           // Number of docs before auto-commit (default: 1000)
+	commitInterval   time.Duration // Time before auto-commit (default: 1s)
+	refreshInterval  time.Duration // Time before auto-refresh (default: 1s)
+	commitTicker     *time.Ticker  // Background commit ticker
+	refreshTicker    *time.Ticker  // Background refresh ticker
+	stopCommitter    chan struct{} // Signal to stop background committer
+	stopRefresher    chan struct{} // Signal to stop background refresher
+	needsCommit      bool          // Flag indicating pending changes need commit
+	needsRefresh     bool          // Flag indicating committed changes need refresh
+	commitInProgress bool          // Guard: true while C++ Commit is running (prevents goroutine pile-up)
 }
 
 // ShardState represents the state of a shard

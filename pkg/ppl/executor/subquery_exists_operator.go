@@ -16,21 +16,21 @@ import (
 // Note: This is a simplified implementation that only supports uncorrelated EXISTS.
 // Correlated EXISTS (with references to outer query) requires more complex implementation.
 type subqueryExistsOperator struct {
-	input          Operator
-	logger         *zap.Logger
-	ctx            context.Context
-	stats          *IteratorStats
-	opened         bool
-	closed         bool
-	subqueryExec   *SubqueryExecutor
-	negate         bool              // If true, NOT EXISTS
-	existsResult   bool              // Cached result of EXISTS check
+	input        Operator
+	logger       *zap.Logger
+	ctx          context.Context
+	stats        *IteratorStats
+	opened       bool
+	closed       bool
+	subqueryExec *SubqueryExecutor
+	negate       bool // If true, NOT EXISTS
+	existsResult bool // Cached result of EXISTS check
 }
 
 // SubqueryExistsConfig holds configuration for EXISTS subquery operator
 type SubqueryExistsConfig struct {
-	Subsearch Operator        // Subsearch pipeline
-	Negate    bool            // If true, NOT EXISTS
+	Subsearch Operator // Subsearch pipeline
+	Negate    bool     // If true, NOT EXISTS
 }
 
 // NewSubqueryExistsOperator creates a new EXISTS subquery operator

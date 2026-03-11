@@ -20,8 +20,8 @@ func BenchmarkResultSorting(b *testing.B) {
 		hits := make([]*pb.SearchHit, 100)
 		for j := 0; j < 100; j++ {
 			hits[j] = &pb.SearchHit{
-				Id:         fmt.Sprintf("doc-%d-%d", i, j),
-				Score:      float64(1000 - i*100 - j), // Descending scores
+				Id:    fmt.Sprintf("doc-%d-%d", i, j),
+				Score: float64(1000 - i*100 - j), // Descending scores
 				// Benchmark doesn't need actual source data
 			}
 		}
@@ -55,8 +55,8 @@ func BenchmarkResultSortingLargeDataset(b *testing.B) {
 		hits := make([]*pb.SearchHit, 1000)
 		for j := 0; j < 1000; j++ {
 			hits[j] = &pb.SearchHit{
-				Id:         fmt.Sprintf("doc-%d-%d", i, j),
-				Score:      float64(10000 - i*1000 - j),
+				Id:    fmt.Sprintf("doc-%d-%d", i, j),
+				Score: float64(10000 - i*1000 - j),
 				// Benchmark doesn't need actual source data
 			}
 		}
@@ -90,8 +90,8 @@ func BenchmarkResultSortingDeepPagination(b *testing.B) {
 		hits := make([]*pb.SearchHit, 100)
 		for j := 0; j < 100; j++ {
 			hits[j] = &pb.SearchHit{
-				Id:         fmt.Sprintf("doc-%d-%d", i, j),
-				Score:      float64(1000 - i*100 - j),
+				Id:    fmt.Sprintf("doc-%d-%d", i, j),
+				Score: float64(1000 - i*100 - j),
 				// Benchmark doesn't need actual source data
 			}
 		}

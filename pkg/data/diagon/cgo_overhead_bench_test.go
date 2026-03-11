@@ -38,7 +38,7 @@ func TestCGOOverheadBreakdown(t *testing.T) {
 		"@timestamp": "2023-01-15T10:30:00.000Z",
 		"message":    "Jan 15 10:30:00 ip-172-31-20-153 kernel: [1234567.890123] audit: type=1400 msg=audit(1234567890.123:456789): apparmor=\"STATUS\" operation=\"profile_load\" profile=\"unconfined\" name=\"/usr/bin/evince\" pid=12345 comm=\"apparmor_parser\"",
 		"log": map[string]interface{}{
-			"file": map[string]interface{}{"path": "/var/log/messages/birdknight"},
+			"file":  map[string]interface{}{"path": "/var/log/messages/birdknight"},
 			"level": "info",
 		},
 		"cloud": map[string]interface{}{"region": "us-east-1"},

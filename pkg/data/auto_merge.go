@@ -22,23 +22,23 @@ type AutoMergeScheduler struct {
 	maxConcurrentJobs int   // Maximum concurrent merge operations
 
 	// State
-	mu              sync.RWMutex
-	running         bool
-	stopCh          chan struct{}
-	wg              sync.WaitGroup
-	activeMerges    map[string]bool // shardKey -> is merging
-	lastMergeTime   map[string]time.Time
-	mergeMetrics    *MergeMetrics
+	mu            sync.RWMutex
+	running       bool
+	stopCh        chan struct{}
+	wg            sync.WaitGroup
+	activeMerges  map[string]bool // shardKey -> is merging
+	lastMergeTime map[string]time.Time
+	mergeMetrics  *MergeMetrics
 }
 
 // MergeMetrics tracks merge operation statistics
 type MergeMetrics struct {
-	mu                    sync.RWMutex
-	TotalMerges           int64
-	SuccessfulMerges      int64
-	FailedMerges          int64
-	TotalDuration         time.Duration
-	TotalSegmentsReduced  int64
+	mu                   sync.RWMutex
+	TotalMerges          int64
+	SuccessfulMerges     int64
+	FailedMerges         int64
+	TotalDuration        time.Duration
+	TotalSegmentsReduced int64
 }
 
 // AutoMergeConfig configures the auto-merge scheduler
@@ -55,11 +55,11 @@ type AutoMergeConfig struct {
 func DefaultAutoMergeConfig() *AutoMergeConfig {
 	return &AutoMergeConfig{
 		Enabled:           true,
-		CheckInterval:     5 * time.Minute,  // Check every 5 minutes
-		SegmentThreshold:  10,                // Merge if > 10 segments
-		TargetSegments:    3,                 // Merge down to 3 segments
-		MinDocsForMerge:   1000,              // Only merge shards with >= 1000 docs
-		MaxConcurrentJobs: 2,                 // Max 2 concurrent merges
+		CheckInterval:     5 * time.Minute, // Check every 5 minutes
+		SegmentThreshold:  10,              // Merge if > 10 segments
+		TargetSegments:    3,               // Merge down to 3 segments
+		MinDocsForMerge:   1000,            // Only merge shards with >= 1000 docs
+		MaxConcurrentJobs: 2,               // Max 2 concurrent merges
 	}
 }
 
@@ -338,17 +338,17 @@ func (s *AutoMergeScheduler) GetMetrics() map[string]interface{} {
 	s.mu.RUnlock()
 
 	return map[string]interface{}{
-		"enabled":               s.enabled,
-		"running":               s.running,
-		"total_merges":          s.mergeMetrics.TotalMerges,
-		"successful_merges":     s.mergeMetrics.SuccessfulMerges,
-		"failed_merges":         s.mergeMetrics.FailedMerges,
+		"enabled":                s.enabled,
+		"running":                s.running,
+		"total_merges":           s.mergeMetrics.TotalMerges,
+		"successful_merges":      s.mergeMetrics.SuccessfulMerges,
+		"failed_merges":          s.mergeMetrics.FailedMerges,
 		"total_segments_reduced": s.mergeMetrics.TotalSegmentsReduced,
-		"avg_duration_ms":       avgDuration.Milliseconds(),
-		"active_merges":         activeMerges,
-		"check_interval_sec":    s.checkInterval.Seconds(),
-		"segment_threshold":     s.segmentThreshold,
-		"target_segments":       s.targetSegments,
+		"avg_duration_ms":        avgDuration.Milliseconds(),
+		"active_merges":          activeMerges,
+		"check_interval_sec":     s.checkInterval.Seconds(),
+		"segment_threshold":      s.segmentThreshold,
+		"target_segments":        s.targetSegments,
 	}
 }
 

@@ -128,9 +128,9 @@ func computeDateHistogramAgg(rows []map[string]interface{}, agg *Aggregation) *A
 
 	// Collect timestamps and bucket
 	type bucketData struct {
-		key      time.Time
-		count    int64
-		rows     []map[string]interface{}
+		key   time.Time
+		count int64
+		rows  []map[string]interface{}
 	}
 	bucketMap := make(map[int64]*bucketData)
 

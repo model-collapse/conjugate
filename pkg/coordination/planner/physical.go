@@ -12,15 +12,15 @@ import (
 type PhysicalPlanType string
 
 const (
-	PhysicalPlanTypeScan           PhysicalPlanType = "scan"
-	PhysicalPlanTypeFilter         PhysicalPlanType = "filter"
-	PhysicalPlanTypeProject        PhysicalPlanType = "project"
-	PhysicalPlanTypeAggregate      PhysicalPlanType = "aggregate"
-	PhysicalPlanTypeSort           PhysicalPlanType = "sort"
-	PhysicalPlanTypeLimit          PhysicalPlanType = "limit"
-	PhysicalPlanTypeTopN           PhysicalPlanType = "topn"
-	PhysicalPlanTypeHashAggregate  PhysicalPlanType = "hash_aggregate"
-	PhysicalPlanTypeIndexScan      PhysicalPlanType = "index_scan"
+	PhysicalPlanTypeScan          PhysicalPlanType = "scan"
+	PhysicalPlanTypeFilter        PhysicalPlanType = "filter"
+	PhysicalPlanTypeProject       PhysicalPlanType = "project"
+	PhysicalPlanTypeAggregate     PhysicalPlanType = "aggregate"
+	PhysicalPlanTypeSort          PhysicalPlanType = "sort"
+	PhysicalPlanTypeLimit         PhysicalPlanType = "limit"
+	PhysicalPlanTypeTopN          PhysicalPlanType = "topn"
+	PhysicalPlanTypeHashAggregate PhysicalPlanType = "hash_aggregate"
+	PhysicalPlanTypeIndexScan     PhysicalPlanType = "index_scan"
 )
 
 // PhysicalPlan represents a physical query plan node (executable)
@@ -46,11 +46,11 @@ type PhysicalPlan interface {
 
 // ExecutionResult represents the result of executing a physical plan
 type ExecutionResult struct {
-	Rows         []map[string]interface{} // Result rows
-	TotalHits    int64                    // Total number of matching documents
-	MaxScore     float64                  // Maximum relevance score
+	Rows         []map[string]interface{}      // Result rows
+	TotalHits    int64                         // Total number of matching documents
+	MaxScore     float64                       // Maximum relevance score
 	Aggregations map[string]*AggregationResult // Aggregation results
-	TookMillis   int64                    // Execution time in milliseconds
+	TookMillis   int64                         // Execution time in milliseconds
 }
 
 // AggregationResult represents the result of an aggregation
@@ -63,8 +63,8 @@ type AggregationResult struct {
 
 // Bucket represents a bucket in a bucketing aggregation
 type Bucket struct {
-	Key      interface{} // Bucket key
-	DocCount int64       // Number of documents in this bucket
+	Key      interface{}                   // Bucket key
+	DocCount int64                         // Number of documents in this bucket
 	SubAggs  map[string]*AggregationResult // Sub-aggregations
 }
 
@@ -79,21 +79,21 @@ type Stats struct {
 
 // PhysicalScan represents a physical scan operation
 type PhysicalScan struct {
-	IndexName    string
-	Shards       []int32
-	Filter       *Expression
-	Fields       []string // Fields to retrieve (projection)
-	OutputSchema *Schema
+	IndexName     string
+	Shards        []int32
+	Filter        *Expression
+	Fields        []string // Fields to retrieve (projection)
+	OutputSchema  *Schema
 	EstimatedCost *Cost
-	MaxResults   int              // Max docs to retrieve from data node (0 = default 100)
-	Aggregations []*Aggregation   // Aggregations to push down to data node
-	Sort         []string         // Sort fields pushed to data node (e.g. ["@timestamp:desc"])
+	MaxResults    int            // Max docs to retrieve from data node (0 = default 100)
+	Aggregations  []*Aggregation // Aggregations to push down to data node
+	Sort          []string       // Sort fields pushed to data node (e.g. ["@timestamp:desc"])
 }
 
-func (s *PhysicalScan) Type() PhysicalPlanType      { return PhysicalPlanTypeScan }
-func (s *PhysicalScan) Children() []PhysicalPlan    { return nil }
-func (s *PhysicalScan) Schema() *Schema             { return s.OutputSchema }
-func (s *PhysicalScan) Cost() *Cost                 { return s.EstimatedCost }
+func (s *PhysicalScan) Type() PhysicalPlanType   { return PhysicalPlanTypeScan }
+func (s *PhysicalScan) Children() []PhysicalPlan { return nil }
+func (s *PhysicalScan) Schema() *Schema          { return s.OutputSchema }
+func (s *PhysicalScan) Cost() *Cost              { return s.EstimatedCost }
 func (s *PhysicalScan) Execute(ctx context.Context) (*ExecutionResult, error) {
 	// Get execution context
 	execCtx, err := GetExecutionContext(ctx)
@@ -180,9 +180,9 @@ func (s *PhysicalScan) String() string {
 
 // PhysicalFilter represents a physical filter operation
 type PhysicalFilter struct {
-	Condition   *Expression
-	Child       PhysicalPlan
-	OutputSchema *Schema
+	Condition     *Expression
+	Child         PhysicalPlan
+	OutputSchema  *Schema
 	EstimatedCost *Cost
 }
 
@@ -210,9 +210,9 @@ func (f *PhysicalFilter) String() string {
 
 // PhysicalProject represents a physical projection operation
 type PhysicalProject struct {
-	Fields       []string
-	Child        PhysicalPlan
-	OutputSchema *Schema
+	Fields        []string
+	Child         PhysicalPlan
+	OutputSchema  *Schema
 	EstimatedCost *Cost
 }
 

@@ -101,9 +101,9 @@ func TestParser_FieldsCommand(t *testing.T) {
 	parser := NewParser()
 
 	tests := []struct {
-		name     string
-		query    string
-		includes bool
+		name      string
+		query     string
+		includes  bool
 		numFields int
 	}{
 		{
@@ -140,8 +140,8 @@ func TestParser_StatsCommand(t *testing.T) {
 	parser := NewParser()
 
 	tests := []struct {
-		name    string
-		query   string
+		name       string
+		query      string
 		hasGroupBy bool
 	}{
 		{

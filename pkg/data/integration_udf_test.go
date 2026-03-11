@@ -136,7 +136,7 @@ func TestIntegration_SimpleUDFQuery(t *testing.T) {
 		FunctionName: "filter",
 		Description:  "Test UDF that always returns true",
 		WASMBytes:    wasmBytes,
-		Parameters: []wasm.UDFParameter{},
+		Parameters:   []wasm.UDFParameter{},
 		Returns: []wasm.UDFReturnType{
 			{Type: wasm.ValueTypeI32, Description: "Boolean result (0=false, 1=true)"},
 		},
@@ -196,7 +196,7 @@ func TestIntegration_UDFFiltersOutAll(t *testing.T) {
 		FunctionName: "filter",
 		Description:  "Test UDF that always returns false",
 		WASMBytes:    wasmBytes,
-		Parameters: []wasm.UDFParameter{},
+		Parameters:   []wasm.UDFParameter{},
 		Returns: []wasm.UDFReturnType{
 			{Type: wasm.ValueTypeI32, Description: "Boolean result (0=false, 1=true)"},
 		},
@@ -257,7 +257,7 @@ func TestIntegration_BoolQueryWithUDF(t *testing.T) {
 		FunctionName: "filter",
 		Description:  "Test filter UDF",
 		WASMBytes:    wasmBytes,
-		Parameters: []wasm.UDFParameter{},
+		Parameters:   []wasm.UDFParameter{},
 		Returns: []wasm.UDFReturnType{
 			{Type: wasm.ValueTypeI32, Description: "Boolean result (0=false, 1=true)"},
 		},
@@ -358,7 +358,7 @@ func TestIntegration_UDFWithParameters(t *testing.T) {
 		FunctionName: "filter",
 		Description:  "Filter by price",
 		WASMBytes:    wasmBytes,
-		Parameters: []wasm.UDFParameter{},
+		Parameters:   []wasm.UDFParameter{},
 		Returns: []wasm.UDFReturnType{
 			{Type: wasm.ValueTypeI32, Description: "Boolean result (0=false, 1=true)"},
 		},
@@ -452,7 +452,7 @@ func TestIntegration_MultipleDocuments(t *testing.T) {
 		FunctionName: "filter",
 		Description:  "Batch processing test",
 		WASMBytes:    wasmBytes,
-		Parameters: []wasm.UDFParameter{},
+		Parameters:   []wasm.UDFParameter{},
 		Returns: []wasm.UDFReturnType{
 			{Type: wasm.ValueTypeI32, Description: "Boolean result (0=false, 1=true)"},
 		},
@@ -504,7 +504,7 @@ func TestIntegration_ConcurrentQueries(t *testing.T) {
 		FunctionName: "filter",
 		Description:  "Concurrent query test",
 		WASMBytes:    wasmBytes,
-		Parameters: []wasm.UDFParameter{},
+		Parameters:   []wasm.UDFParameter{},
 		Returns: []wasm.UDFReturnType{
 			{Type: wasm.ValueTypeI32, Description: "Boolean result (0=false, 1=true)"},
 		},
@@ -563,7 +563,7 @@ func TestIntegration_UDFStatistics(t *testing.T) {
 		FunctionName: "filter",
 		Description:  "Statistics test",
 		WASMBytes:    wasmBytes,
-		Parameters: []wasm.UDFParameter{},
+		Parameters:   []wasm.UDFParameter{},
 		Returns: []wasm.UDFReturnType{
 			{Type: wasm.ValueTypeI32, Description: "Boolean result (0=false, 1=true)"},
 		},
@@ -647,7 +647,7 @@ func BenchmarkIntegration_UDFQuery(b *testing.B) {
 		Version:      "1.0.0",
 		FunctionName: "filter",
 		WASMBytes:    wasmBytes,
-		Parameters: []wasm.UDFParameter{},
+		Parameters:   []wasm.UDFParameter{},
 		Returns: []wasm.UDFReturnType{
 			{Type: wasm.ValueTypeI32, Description: "Boolean result (0=false, 1=true)"},
 		},

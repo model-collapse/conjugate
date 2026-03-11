@@ -20,9 +20,9 @@ type appendcolOperator struct {
 	stats          *IteratorStats
 	opened         bool
 	closed         bool
-	subsearchRows  []*Row  // Buffer subsearch results
-	subsearchIndex int     // Current position in subsearch results
-	override       bool    // If true, subsearch columns override main columns
+	subsearchRows  []*Row // Buffer subsearch results
+	subsearchIndex int    // Current position in subsearch results
+	override       bool   // If true, subsearch columns override main columns
 }
 
 // NewAppendcolOperator creates a new appendcol operator

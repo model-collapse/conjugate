@@ -9,7 +9,7 @@ import (
 
 // Converter converts parser AST to logical plans
 type Converter struct {
-	defaultCardinality int64 // Default cardinality for scans when unknown
+	defaultCardinality int64           // Default cardinality for scans when unknown
 	dateMathParser     *DateMathParser // Parser for date math expressions
 }
 

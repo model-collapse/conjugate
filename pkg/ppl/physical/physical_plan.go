@@ -51,16 +51,16 @@ type PhysicalPlan interface {
 type PhysicalScan struct {
 	Source         string
 	OutputSchema   *analyzer.Schema
-	Filter         ast.Expression         // Optional pushed-down filter
-	Fields         []string               // Optional pushed-down projection
-	SortKeys       []*ast.SortKey         // Optional pushed-down sort
-	Limit          int                    // Optional pushed-down limit (0 = no limit)
-	ComputedFields []*ast.EvalAssignment  // Optional pushed-down computed fields (eval)
+	Filter         ast.Expression        // Optional pushed-down filter
+	Fields         []string              // Optional pushed-down projection
+	SortKeys       []*ast.SortKey        // Optional pushed-down sort
+	Limit          int                   // Optional pushed-down limit (0 = no limit)
+	ComputedFields []*ast.EvalAssignment // Optional pushed-down computed fields (eval)
 }
 
-func (p *PhysicalScan) Schema() *analyzer.Schema        { return p.OutputSchema }
-func (p *PhysicalScan) Children() []PhysicalPlan        { return nil }
-func (p *PhysicalScan) Location() ExecutionLocation     { return ExecuteOnDataNode }
+func (p *PhysicalScan) Schema() *analyzer.Schema    { return p.OutputSchema }
+func (p *PhysicalScan) Children() []PhysicalPlan    { return nil }
+func (p *PhysicalScan) Location() ExecutionLocation { return ExecuteOnDataNode }
 func (p *PhysicalScan) String() string {
 	parts := []string{fmt.Sprintf("PhysicalScan(%s)", p.Source)}
 
@@ -253,7 +253,7 @@ func IsPushedDown(plan PhysicalPlan) bool {
 	scans := GetLeafScans(plan)
 	for _, scan := range scans {
 		if scan.Filter != nil || len(scan.Fields) > 0 ||
-		   len(scan.SortKeys) > 0 || scan.Limit > 0 || len(scan.ComputedFields) > 0 {
+			len(scan.SortKeys) > 0 || scan.Limit > 0 || len(scan.ComputedFields) > 0 {
 			return true
 		}
 	}
@@ -698,9 +698,9 @@ type PhysicalReverse struct {
 	OutputSchema *analyzer.Schema
 }
 
-func (p *PhysicalReverse) Schema() *analyzer.Schema         { return p.OutputSchema }
-func (p *PhysicalReverse) Children() []PhysicalPlan         { return []PhysicalPlan{p.Input} }
-func (p *PhysicalReverse) Location() ExecutionLocation      { return ExecuteOnCoordinator }
+func (p *PhysicalReverse) Schema() *analyzer.Schema    { return p.OutputSchema }
+func (p *PhysicalReverse) Children() []PhysicalPlan    { return []PhysicalPlan{p.Input} }
+func (p *PhysicalReverse) Location() ExecutionLocation { return ExecuteOnCoordinator }
 func (p *PhysicalReverse) String() string {
 	return "Reverse()"
 }
@@ -713,9 +713,9 @@ type PhysicalFlatten struct {
 	OutputSchema *analyzer.Schema
 }
 
-func (p *PhysicalFlatten) Schema() *analyzer.Schema         { return p.OutputSchema }
-func (p *PhysicalFlatten) Children() []PhysicalPlan         { return []PhysicalPlan{p.Input} }
-func (p *PhysicalFlatten) Location() ExecutionLocation      { return ExecuteOnCoordinator }
+func (p *PhysicalFlatten) Schema() *analyzer.Schema    { return p.OutputSchema }
+func (p *PhysicalFlatten) Children() []PhysicalPlan    { return []PhysicalPlan{p.Input} }
+func (p *PhysicalFlatten) Location() ExecutionLocation { return ExecuteOnCoordinator }
 func (p *PhysicalFlatten) String() string {
 	return fmt.Sprintf("Flatten(%s)", p.Field.String())
 }

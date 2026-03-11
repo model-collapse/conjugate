@@ -411,10 +411,10 @@ func TestAllocateShardsLargeNumberOfShards(t *testing.T) {
 
 	// Create cluster state with 5 nodes
 	state := &raft.ClusterState{
-		Version:     1,
-		ClusterUUID: "test-cluster",
-		Indices:     make(map[string]*raft.IndexMeta),
-		Nodes:       make(map[string]*raft.NodeMeta),
+		Version:      1,
+		ClusterUUID:  "test-cluster",
+		Indices:      make(map[string]*raft.IndexMeta),
+		Nodes:        make(map[string]*raft.NodeMeta),
 		ShardRouting: make(map[string]*raft.ShardRouting),
 	}
 

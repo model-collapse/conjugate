@@ -116,8 +116,8 @@ func TestQueryExecutorSearchTwoShards(t *testing.T) {
 				Total:    &pb.TotalHits{Value: 50, Relation: "eq"},
 				MaxScore: 0.95,
 				Hits: []*pb.SearchHit{
-					{Id: "doc1", Score: 0.95, }, // Simplified for mock
-					{Id: "doc2", Score: 0.90, },
+					{Id: "doc1", Score: 0.95}, // Simplified for mock
+					{Id: "doc2", Score: 0.90},
 				},
 			},
 		},
@@ -133,8 +133,8 @@ func TestQueryExecutorSearchTwoShards(t *testing.T) {
 				Total:    &pb.TotalHits{Value: 45, Relation: "eq"},
 				MaxScore: 0.98,
 				Hits: []*pb.SearchHit{
-					{Id: "doc3", Score: 0.98, }, // Simplified for mock
-					{Id: "doc4", Score: 0.85, },
+					{Id: "doc3", Score: 0.98}, // Simplified for mock
+					{Id: "doc4", Score: 0.85},
 				},
 			},
 		},
@@ -191,8 +191,8 @@ func TestQueryExecutorSearchWithPagination(t *testing.T) {
 	hits := make([]*pb.SearchHit, 100)
 	for i := 0; i < 100; i++ {
 		hits[i] = &pb.SearchHit{
-			Id:     string(rune('A' + i)),
-			Score:  float64(100 - i), // Descending scores
+			Id:    string(rune('A' + i)),
+			Score: float64(100 - i), // Descending scores
 			// SourceJson omitted for mock
 		}
 	}

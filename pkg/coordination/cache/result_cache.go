@@ -64,21 +64,21 @@ var (
 
 // ResultCache provides high-performance caching of query results using Ristretto
 type ResultCache struct {
-	cache      *ristretto.Cache
-	ttl        time.Duration
-	enabled    bool
-	hits       uint64
-	misses     uint64
-	maxCost    int64 // Maximum cache size in bytes
+	cache       *ristretto.Cache
+	ttl         time.Duration
+	enabled     bool
+	hits        uint64
+	misses      uint64
+	maxCost     int64 // Maximum cache size in bytes
 	defaultCost int64 // Default cost per entry if size cannot be estimated
 }
 
 // ResultCacheConfig configures the result cache
 type ResultCacheConfig struct {
 	// Cache size
-	MaxCost     int64         // Max size in bytes (default: 1GB)
-	NumCounters int64         // Number of keys to track frequency (default: 100M)
-	MaxEntries  int64         // Max number of cache entries (default: 10000)
+	MaxCost     int64 // Max size in bytes (default: 1GB)
+	NumCounters int64 // Number of keys to track frequency (default: 100M)
+	MaxEntries  int64 // Max number of cache entries (default: 10000)
 
 	// TTL
 	TTL time.Duration // Time-to-live for cached results (default: 2 minutes)
@@ -95,10 +95,10 @@ func DefaultResultCacheConfig() *ResultCacheConfig {
 	return &ResultCacheConfig{
 		MaxCost:     1024 * 1024 * 1024, // 1 GB
 		NumCounters: 100_000_000,        // 100M counters
-		MaxEntries:  10000,               // 10K entries max
+		MaxEntries:  10000,              // 10K entries max
 		TTL:         2 * time.Minute,    // 2 minute TTL
 		Enabled:     true,
-		DefaultCost: 10 * 1024,          // 10 KB default
+		DefaultCost: 10 * 1024, // 10 KB default
 	}
 }
 

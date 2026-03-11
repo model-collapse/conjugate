@@ -44,9 +44,9 @@ func (s *SearchCommand) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitSearchCommand(s)
 }
 
-func (s *SearchCommand) Type() NodeType     { return NodeTypeSearchCommand }
-func (s *SearchCommand) commandNode()       {}
-func (s *SearchCommand) String() string     { return fmt.Sprintf("source=%s", s.Source) }
+func (s *SearchCommand) Type() NodeType { return NodeTypeSearchCommand }
+func (s *SearchCommand) commandNode()   {}
+func (s *SearchCommand) String() string { return fmt.Sprintf("source=%s", s.Source) }
 
 // WhereCommand: where <condition>
 type WhereCommand struct {
@@ -58,9 +58,9 @@ func (w *WhereCommand) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitWhereCommand(w)
 }
 
-func (w *WhereCommand) Type() NodeType     { return NodeTypeWhereCommand }
-func (w *WhereCommand) commandNode()       {}
-func (w *WhereCommand) String() string     { return fmt.Sprintf("where %s", w.Condition.String()) }
+func (w *WhereCommand) Type() NodeType { return NodeTypeWhereCommand }
+func (w *WhereCommand) commandNode()   {}
+func (w *WhereCommand) String() string { return fmt.Sprintf("where %s", w.Condition.String()) }
 
 // FieldsCommand: fields <field1>, <field2>, ...
 type FieldsCommand struct {
@@ -197,9 +197,9 @@ func (d *DescribeCommand) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitDescribeCommand(d)
 }
 
-func (d *DescribeCommand) Type() NodeType     { return NodeTypeDescribeCommand }
-func (d *DescribeCommand) commandNode()       {}
-func (d *DescribeCommand) String() string     { return fmt.Sprintf("describe %s", d.Source) }
+func (d *DescribeCommand) Type() NodeType { return NodeTypeDescribeCommand }
+func (d *DescribeCommand) commandNode()   {}
+func (d *DescribeCommand) String() string { return fmt.Sprintf("describe %s", d.Source) }
 
 // ShowDatasourcesCommand: showdatasources (no args)
 type ShowDatasourcesCommand struct {
@@ -210,9 +210,9 @@ func (s *ShowDatasourcesCommand) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitShowDatasourcesCommand(s)
 }
 
-func (s *ShowDatasourcesCommand) Type() NodeType     { return NodeTypeShowDatasourcesCommand }
-func (s *ShowDatasourcesCommand) commandNode()       {}
-func (s *ShowDatasourcesCommand) String() string     { return "showdatasources" }
+func (s *ShowDatasourcesCommand) Type() NodeType { return NodeTypeShowDatasourcesCommand }
+func (s *ShowDatasourcesCommand) commandNode()   {}
+func (s *ShowDatasourcesCommand) String() string { return "showdatasources" }
 
 // ExplainCommand: explain (applied to entire query)
 type ExplainCommand struct {
@@ -223,9 +223,9 @@ func (e *ExplainCommand) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitExplainCommand(e)
 }
 
-func (e *ExplainCommand) Type() NodeType     { return NodeTypeExplainCommand }
-func (e *ExplainCommand) commandNode()       {}
-func (e *ExplainCommand) String() string     { return "explain" }
+func (e *ExplainCommand) Type() NodeType { return NodeTypeExplainCommand }
+func (e *ExplainCommand) commandNode()   {}
+func (e *ExplainCommand) String() string { return "explain" }
 
 // ============================================================================
 // Tier 1 Commands
@@ -530,7 +530,7 @@ func (r *ReplaceMapping) String() string {
 // ReplaceCommand: replace <oldval1> with <newval1>, <oldval2> with <newval2> in <field>
 type ReplaceCommand struct {
 	BaseNode
-	Mappings []* ReplaceMapping
+	Mappings []*ReplaceMapping
 	Field    string // Target field to apply replacements
 }
 
@@ -664,10 +664,10 @@ func (l *LookupOutputField) String() string {
 // Example: lookup users user_id AS uid OUTPUT username AS user
 type LookupCommand struct {
 	BaseNode
-	TableName     string               // Name of the lookup table
-	JoinField     string               // Field from input data to join on
-	JoinFieldAlias string              // Optional alias for join field
-	OutputFields  []*LookupOutputField // Fields to extract from lookup table
+	TableName      string               // Name of the lookup table
+	JoinField      string               // Field from input data to join on
+	JoinFieldAlias string               // Optional alias for join field
+	OutputFields   []*LookupOutputField // Fields to extract from lookup table
 }
 
 func (l *LookupCommand) Accept(visitor Visitor) (interface{}, error) {
@@ -722,9 +722,9 @@ const (
 // Combines datasets with SQL-like joins
 type JoinCommand struct {
 	BaseNode
-	JoinType   JoinType // Type of join (inner, left, right, outer, full)
-	JoinField  string   // Field to join on (from both sides)
-	Subsearch  *Query   // The right side query
+	JoinType  JoinType // Type of join (inner, left, right, outer, full)
+	JoinField string   // Field to join on (from both sides)
+	Subsearch *Query   // The right side query
 }
 
 func (j *JoinCommand) Accept(visitor Visitor) (interface{}, error) {
@@ -773,9 +773,9 @@ func (t *TableCommand) String() string {
 //   - true: Null group keys treated as valid groups
 type EventstatsCommand struct {
 	BaseNode
-	Aggregations    []*Aggregation
-	GroupBy         []Expression
-	BucketNullable  bool // Allow null values in grouping fields (default: false)
+	Aggregations   []*Aggregation
+	GroupBy        []Expression
+	BucketNullable bool // Allow null values in grouping fields (default: false)
 }
 
 func (e *EventstatsCommand) Accept(visitor Visitor) (interface{}, error) {
@@ -891,17 +891,18 @@ func (f *FlattenCommand) String() string {
 // - fieldName: Name of field for row totals when row=true (default: "total")
 //
 // Examples:
-//   addtotals                      # row=true, col=false (add row totals field)
-//   addtotals row=false col=true   # Add summary row with column totals
-//   addtotals row=true col=true    # Add both row totals field AND summary row
+//
+//	addtotals                      # row=true, col=false (add row totals field)
+//	addtotals row=false col=true   # Add summary row with column totals
+//	addtotals row=true col=true    # Add both row totals field AND summary row
 type AddtotalsCommand struct {
 	BaseNode
-	Row         bool         // Add row totals as new field (default: true)
-	Col         bool         // Add column totals in summary row (default: false)
-	Fields      []Expression // Optional: specific fields to total (if empty, total all numeric fields)
-	LabelField  string       // Optional: field to use for the "Total" label (default: first group-by field)
-	Label       string       // Optional: custom label for the total row (default: "Total")
-	FieldName   string       // Optional: name of field for row labels (default: "total")
+	Row        bool         // Add row totals as new field (default: true)
+	Col        bool         // Add column totals in summary row (default: false)
+	Fields     []Expression // Optional: specific fields to total (if empty, total all numeric fields)
+	LabelField string       // Optional: field to use for the "Total" label (default: first group-by field)
+	Label      string       // Optional: custom label for the total row (default: "Total")
+	FieldName  string       // Optional: name of field for row labels (default: "total")
 }
 
 func (a *AddtotalsCommand) Accept(visitor Visitor) (interface{}, error) {
@@ -927,8 +928,9 @@ func (a *AddtotalsCommand) String() string {
 // This command is maintained for backward compatibility but maps to addtotals with col=true.
 //
 // Migration:
-//   Old: addcoltotals field1, field2
-//   New: addtotals row=false col=true field1, field2
+//
+//	Old: addcoltotals field1, field2
+//	New: addtotals row=false col=true field1, field2
 //
 // If no fields are specified, totals are computed for all numeric fields.
 // The total column has field values aggregated (sum for numeric)

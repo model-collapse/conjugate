@@ -19,9 +19,9 @@ func BenchmarkDistributedSearchLatency(b *testing.B) {
 
 	// Test configurations: dataset sizes
 	testCases := []struct {
-		name     string
-		numDocs  int
-		numNodes int
+		name      string
+		numDocs   int
+		numNodes  int
 		numShards int
 	}{
 		{"10K_docs_1_node", 10000, 1, 1},

@@ -14,10 +14,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	pb "github.com/conjugate/conjugate/pkg/common/proto"
 	"github.com/conjugate/conjugate/pkg/coordination/pipeline"
 	"github.com/conjugate/conjugate/pkg/coordination/router"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -262,7 +262,7 @@ func TestDocumentPipeline_FieldTransformation(t *testing.T) {
 	testNode.mockDocRouter.indexDocumentFunc = func(ctx context.Context, indexName string, docID string, document map[string]interface{}) (*pb.IndexDocumentResponse, error) {
 		transformedDoc = document
 		return &pb.IndexDocumentResponse{
-			Version: 1,
+			Version:      1,
 			Acknowledged: true,
 		}, nil
 	}
@@ -348,7 +348,7 @@ func TestDocumentPipeline_FieldEnrichment(t *testing.T) {
 	testNode.mockDocRouter.indexDocumentFunc = func(ctx context.Context, indexName string, docID string, document map[string]interface{}) (*pb.IndexDocumentResponse, error) {
 		transformedDoc = document
 		return &pb.IndexDocumentResponse{
-			Version: 1,
+			Version:      1,
 			Acknowledged: true,
 		}, nil
 	}
@@ -433,7 +433,7 @@ func TestDocumentPipeline_FieldFiltering(t *testing.T) {
 	testNode.mockDocRouter.indexDocumentFunc = func(ctx context.Context, indexName string, docID string, document map[string]interface{}) (*pb.IndexDocumentResponse, error) {
 		transformedDoc = document
 		return &pb.IndexDocumentResponse{
-			Version: 1,
+			Version:      1,
 			Acknowledged: true,
 		}, nil
 	}
@@ -542,7 +542,7 @@ func TestDocumentPipeline_MultipleStages(t *testing.T) {
 	testNode.mockDocRouter.indexDocumentFunc = func(ctx context.Context, indexName string, docID string, document map[string]interface{}) (*pb.IndexDocumentResponse, error) {
 		transformedDoc = document
 		return &pb.IndexDocumentResponse{
-			Version: 1,
+			Version:      1,
 			Acknowledged: true,
 		}, nil
 	}
@@ -614,7 +614,7 @@ func TestDocumentPipeline_FailureGracefulDegradation(t *testing.T) {
 	testNode.mockDocRouter.indexDocumentFunc = func(ctx context.Context, indexName string, docID string, document map[string]interface{}) (*pb.IndexDocumentResponse, error) {
 		indexedDoc = document
 		return &pb.IndexDocumentResponse{
-			Version: 1,
+			Version:      1,
 			Acknowledged: true,
 		}, nil
 	}
@@ -700,7 +700,7 @@ func TestDocumentPipeline_ValidationPipeline(t *testing.T) {
 	testNode.mockDocRouter.indexDocumentFunc = func(ctx context.Context, indexName string, docID string, document map[string]interface{}) (*pb.IndexDocumentResponse, error) {
 		transformedDoc = document
 		return &pb.IndexDocumentResponse{
-			Version: 1,
+			Version:      1,
 			Acknowledged: true,
 		}, nil
 	}
@@ -815,7 +815,7 @@ func TestDocumentPipeline_BothQueryAndDocumentPipelines(t *testing.T) {
 	testNode.mockDocRouter.indexDocumentFunc = func(ctx context.Context, indexName string, docID string, document map[string]interface{}) (*pb.IndexDocumentResponse, error) {
 		transformedDoc = document
 		return &pb.IndexDocumentResponse{
-			Version: 1,
+			Version:      1,
 			Acknowledged: true,
 		}, nil
 	}

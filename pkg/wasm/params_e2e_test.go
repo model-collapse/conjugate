@@ -48,8 +48,8 @@ var testStringParamWasm = []byte{
 	0x41, 0x40, // i32.const 64 (value len ptr)
 	0x10, 0x00, // call get_param_string
 	0x41, 0x00, // i32.const 0
-	0x46,       // i32.eq (check if result == 0, success)
-	0x0b,       // end
+	0x46, // i32.eq (check if result == 0, success)
+	0x0b, // end
 }
 
 // WASM module that tests get_param_i64
@@ -92,8 +92,8 @@ var testI64ParamWasm = []byte{
 	0x21, 0x00, // local.set 0 (store result)
 	0x20, 0x00, // local.get 0
 	0x41, 0x00, // i32.const 0
-	0x46,       // i32.eq (check result == 0)
-	0x0b,       // end
+	0x46, // i32.eq (check result == 0)
+	0x0b, // end
 }
 
 // WASM module that tests get_param_f64
@@ -134,8 +134,8 @@ var testF64ParamWasm = []byte{
 	0x21, 0x00, // local.set 0
 	0x20, 0x00, // local.get 0
 	0x41, 0x00, // i32.const 0
-	0x46,       // i32.eq
-	0x0b,       // end
+	0x46, // i32.eq
+	0x0b, // end
 }
 
 // WASM module that tests get_param_bool
@@ -177,8 +177,8 @@ var testBoolParamWasm = []byte{
 	0x21, 0x00, // local.set 0
 	0x20, 0x00, // local.get 0
 	0x41, 0x00, // i32.const 0
-	0x46,       // i32.eq
-	0x0b,       // end
+	0x46, // i32.eq
+	0x0b, // end
 }
 
 // TestParameterHostFunctionsE2E tests parameter access in actual WASM execution

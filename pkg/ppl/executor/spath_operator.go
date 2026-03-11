@@ -17,18 +17,19 @@ import (
 // Supports JSONPath syntax for extracting nested values
 //
 // Examples:
-//   spath path="response.user.id" output=user_id
-//   spath input=data path="$.items[*].name" output=item_names
-//   spath (auto-extract all JSON fields from _raw)
+//
+//	spath path="response.user.id" output=user_id
+//	spath input=data path="$.items[*].name" output=item_names
+//	spath (auto-extract all JSON fields from _raw)
 type spathOperator struct {
-	input      Operator
-	logger     *zap.Logger
-	ctx        context.Context
-	stats      *IteratorStats
-	opened     bool
-	closed     bool
-	inputField string // Field to extract from (default: "_raw")
-	path       string // JSONPath expression (empty = auto-extract)
+	input       Operator
+	logger      *zap.Logger
+	ctx         context.Context
+	stats       *IteratorStats
+	opened      bool
+	closed      bool
+	inputField  string // Field to extract from (default: "_raw")
+	path        string // JSONPath expression (empty = auto-extract)
 	outputField string // Field to write to (default: last component of path)
 	autoExtract bool   // If true, extract all JSON fields
 }
@@ -67,9 +68,10 @@ func NewSpathOperator(input Operator, config SpathConfig, logger *zap.Logger) *s
 
 // deriveFieldName extracts a field name from a JSONPath
 // Examples:
-//   "$.user.name" -> "name"
-//   "response.data.id" -> "id"
-//   "items[0].title" -> "title"
+//
+//	"$.user.name" -> "name"
+//	"response.data.id" -> "id"
+//	"items[0].title" -> "title"
 func deriveFieldName(path string) string {
 	// Remove leading $. if present
 	path = strings.TrimPrefix(path, "$.")

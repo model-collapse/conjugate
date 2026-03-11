@@ -11,11 +11,11 @@ import (
 
 // Grok represents a compiled grok pattern
 type Grok struct {
-	pattern      string                 // Original grok pattern
-	regexp       *regexp.Regexp         // Compiled regex
-	fieldNames   []string               // Ordered list of captured field names
-	fieldTypes   map[string]string      // Field name -> type (int, float, string)
-	subPatterns  map[string]string      // Custom sub-patterns
+	pattern     string            // Original grok pattern
+	regexp      *regexp.Regexp    // Compiled regex
+	fieldNames  []string          // Ordered list of captured field names
+	fieldTypes  map[string]string // Field name -> type (int, float, string)
+	subPatterns map[string]string // Custom sub-patterns
 }
 
 // Field represents a captured field from a grok match
@@ -83,16 +83,16 @@ func (g *Grok) compile() error {
 
 		replaced := false
 		for _, match := range matches {
-			fullMatch := match[0]     // %{PATTERN:field:type}
-			patternName := match[1]   // PATTERN
+			fullMatch := match[0]   // %{PATTERN:field:type}
+			patternName := match[1] // PATTERN
 			fieldName := ""
-			fieldType := "string"     // default type
+			fieldType := "string" // default type
 
 			if len(match) > 2 && match[2] != "" {
-				fieldName = match[2]  // field
+				fieldName = match[2] // field
 			}
 			if len(match) > 3 && match[3] != "" {
-				fieldType = match[3]  // type
+				fieldType = match[3] // type
 			}
 
 			// Look up the pattern (first in custom, then in built-in)

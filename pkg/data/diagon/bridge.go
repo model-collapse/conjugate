@@ -687,10 +687,10 @@ func parseDateMathToEpochMs(expr string) int64 {
 
 // DiagonBridge provides a Go interface to the real Diagon C++ search engine
 type DiagonBridge struct {
-	config     *Config
-	logger     *zap.Logger
-	shards     map[string]*Shard
-	mu         sync.RWMutex
+	config *Config
+	logger *zap.Logger
+	shards map[string]*Shard
+	mu     sync.RWMutex
 }
 
 // Config holds Diagon configuration
@@ -764,9 +764,9 @@ func (db *DiagonBridge) CreateShard(path string) (*Shard, error) {
 
 	// Create IndexWriter config
 	config := C.diagon_create_index_writer_config()
-	C.diagon_config_set_ram_buffer_size(config, 256.0)                  // 256MB buffer (tuned for bulk throughput)
-	C.diagon_config_set_max_buffered_docs(config, 100000)              // Let RAM buffer control flushing (default 1000 caused segment explosion)
-	C.diagon_config_set_open_mode(config, 2)                            // CREATE_OR_APPEND
+	C.diagon_config_set_ram_buffer_size(config, 256.0)    // 256MB buffer (tuned for bulk throughput)
+	C.diagon_config_set_max_buffered_docs(config, 100000) // Let RAM buffer control flushing (default 1000 caused segment explosion)
+	C.diagon_config_set_open_mode(config, 2)              // CREATE_OR_APPEND
 	C.diagon_config_set_commit_on_close(config, true)
 
 	// Create IndexWriter
@@ -810,15 +810,15 @@ func (db *DiagonBridge) GetShard(path string) (*Shard, error) {
 
 // Shard represents a real Diagon shard with IndexWriter/IndexReader
 type Shard struct {
-	path         string
-	bridge       *DiagonBridge
-	directory    C.DiagonDirectory
-	writer       C.DiagonIndexWriter
-	reader       C.DiagonIndexReader
-	searcher     C.DiagonIndexSearcher
-	readerDirty  bool // true when writes occurred since last reader open
-	logger       *zap.Logger
-	mu           sync.RWMutex
+	path        string
+	bridge      *DiagonBridge
+	directory   C.DiagonDirectory
+	writer      C.DiagonIndexWriter
+	reader      C.DiagonIndexReader
+	searcher    C.DiagonIndexSearcher
+	readerDirty bool // true when writes occurred since last reader open
+	logger      *zap.Logger
+	mu          sync.RWMutex
 	// termsAggCache caches terms aggregation results keyed by "field:size".
 	// Invalidated when reader is reopened (readerDirty).
 	termsAggCache   map[string][]TermBucket
@@ -1049,7 +1049,6 @@ func (s *Shard) IndexDocument(docID string, doc map[string]interface{}) error {
 
 	return nil
 }
-
 
 // Cached C strings for field names that are identical across all documents.
 // Allocated once (process-lifetime), never freed.
@@ -3262,10 +3261,10 @@ func (s *Shard) ForceMerge(maxSegments int) error {
 
 // ShardStats contains statistics about the shard
 type ShardStats struct {
-	NumDocs      int64 `json:"num_docs"`       // Number of documents
-	MaxDoc       int64 `json:"max_doc"`        // Maximum document ID
-	SegmentCount int   `json:"segment_count"`  // Number of segments
-	SizeBytes    int64 `json:"size_bytes"`     // Index size in bytes
+	NumDocs      int64 `json:"num_docs"`      // Number of documents
+	MaxDoc       int64 `json:"max_doc"`       // Maximum document ID
+	SegmentCount int   `json:"segment_count"` // Number of segments
+	SizeBytes    int64 `json:"size_bytes"`    // Index size in bytes
 }
 
 // GetStats returns statistics about the shard

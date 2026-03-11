@@ -12,10 +12,10 @@ import (
 // Analyzer performs text analysis, converting text into tokens.
 // This is a pure Go implementation that works without CGO.
 type Analyzer struct {
-	name        string
-	tokenizer   func(string) []string
-	filters     []func(string) string
-	stopWords   map[string]bool
+	name      string
+	tokenizer func(string) []string
+	filters   []func(string) string
+	stopWords map[string]bool
 }
 
 // Token represents a single analyzed token with position information.

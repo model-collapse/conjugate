@@ -13,9 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/conjugate/conjugate/pkg/common/config"
 	"github.com/conjugate/conjugate/pkg/common/metrics"
 	pb "github.com/conjugate/conjugate/pkg/common/proto"
@@ -26,6 +23,9 @@ import (
 	"github.com/conjugate/conjugate/pkg/coordination/planner"
 	"github.com/conjugate/conjugate/pkg/coordination/router"
 	"github.com/conjugate/conjugate/pkg/wasm"
+	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 

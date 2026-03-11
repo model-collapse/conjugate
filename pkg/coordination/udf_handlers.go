@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/conjugate/conjugate/pkg/wasm"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
@@ -41,18 +41,18 @@ func (h *UDFHandlers) RegisterRoutes(r *gin.RouterGroup) {
 
 // UDFUploadRequest represents a UDF upload request
 type UDFUploadRequest struct {
-	Name        string                 `json:"name" binding:"required"`
-	Version     string                 `json:"version" binding:"required"`
-	Description string                 `json:"description"`
-	Category    string                 `json:"category"`
-	Author      string                 `json:"author"`
-	Language    string                 `json:"language" binding:"required,oneof=wasm rust c wat python"`
-	FunctionName string                `json:"function_name" binding:"required"`
-	WASMBase64  string                 `json:"wasm_base64" binding:"required"`
-	Parameters  []wasm.UDFParameter    `json:"parameters"`
-	Returns     []wasm.UDFReturnType   `json:"returns" binding:"required"`
-	Tags        []string               `json:"tags"`
-	Metadata    map[string]interface{} `json:"metadata"`
+	Name         string                 `json:"name" binding:"required"`
+	Version      string                 `json:"version" binding:"required"`
+	Description  string                 `json:"description"`
+	Category     string                 `json:"category"`
+	Author       string                 `json:"author"`
+	Language     string                 `json:"language" binding:"required,oneof=wasm rust c wat python"`
+	FunctionName string                 `json:"function_name" binding:"required"`
+	WASMBase64   string                 `json:"wasm_base64" binding:"required"`
+	Parameters   []wasm.UDFParameter    `json:"parameters"`
+	Returns      []wasm.UDFReturnType   `json:"returns" binding:"required"`
+	Tags         []string               `json:"tags"`
+	Metadata     map[string]interface{} `json:"metadata"`
 }
 
 // uploadUDF handles POST /api/v1/udfs
@@ -113,11 +113,11 @@ func (h *UDFHandlers) uploadUDF(c *gin.Context) {
 		zap.Int("wasm_size", len(wasmBytes)))
 
 	c.JSON(http.StatusCreated, gin.H{
-		"message":    "UDF registered successfully",
-		"name":       req.Name,
-		"version":    req.Version,
-		"wasm_size":  len(wasmBytes),
-		"parameters": len(req.Parameters),
+		"message":       "UDF registered successfully",
+		"name":          req.Name,
+		"version":       req.Version,
+		"wasm_size":     len(wasmBytes),
+		"parameters":    len(req.Parameters),
 		"registered_at": metadata.RegisteredAt,
 	})
 }
@@ -275,9 +275,9 @@ func (h *UDFHandlers) deleteUDF(c *gin.Context) {
 
 // UDFTestRequest represents a UDF test request
 type UDFTestRequest struct {
-	Version    string                `json:"version"`
+	Version    string                 `json:"version"`
 	Document   map[string]interface{} `json:"document" binding:"required"`
-	Parameters map[string]wasm.Value `json:"parameters"`
+	Parameters map[string]wasm.Value  `json:"parameters"`
 }
 
 // testUDF handles POST /api/v1/udfs/:name/test

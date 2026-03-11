@@ -71,14 +71,14 @@ func (as *AnalyzerSettings) Validate() error {
 // validateAnalyzerName checks if an analyzer name is valid.
 func validateAnalyzerName(name string) error {
 	validAnalyzers := map[string]bool{
-		"standard":      true,
-		"simple":        true,
-		"whitespace":    true,
-		"keyword":       true,
-		"chinese":       true,
-		"english":       true,
-		"multilingual":  true,
-		"search":        true,
+		"standard":     true,
+		"simple":       true,
+		"whitespace":   true,
+		"keyword":      true,
+		"chinese":      true,
+		"english":      true,
+		"multilingual": true,
+		"search":       true,
 	}
 
 	if !validAnalyzers[name] {

@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/conjugate/conjugate/pkg/coordination/pipeline"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
@@ -45,30 +45,30 @@ func (h *PipelineHandlers) RegisterRoutes(r *gin.RouterGroup) {
 
 // PipelineCreateRequest represents a pipeline creation request
 type PipelineCreateRequest struct {
-	Name        string                      `json:"name" binding:"required"`
-	Version     string                      `json:"version" binding:"required"`
-	Type        pipeline.PipelineType       `json:"type" binding:"required,oneof=query document result"`
-	Description string                      `json:"description"`
-	Stages      []pipeline.StageDefinition  `json:"stages" binding:"required,min=1"`
-	Metadata    map[string]interface{}      `json:"metadata"`
-	Enabled     bool                        `json:"enabled"`
-	OnFailure   pipeline.FailurePolicy      `json:"on_failure,omitempty"`
-	Timeout     *time.Duration              `json:"timeout,omitempty"`
+	Name        string                     `json:"name" binding:"required"`
+	Version     string                     `json:"version" binding:"required"`
+	Type        pipeline.PipelineType      `json:"type" binding:"required,oneof=query document result"`
+	Description string                     `json:"description"`
+	Stages      []pipeline.StageDefinition `json:"stages" binding:"required,min=1"`
+	Metadata    map[string]interface{}     `json:"metadata"`
+	Enabled     bool                       `json:"enabled"`
+	OnFailure   pipeline.FailurePolicy     `json:"on_failure,omitempty"`
+	Timeout     *time.Duration             `json:"timeout,omitempty"`
 }
 
 // PipelineResponse represents a pipeline response
 type PipelineResponse struct {
-	Name        string                      `json:"name"`
-	Version     string                      `json:"version"`
-	Type        pipeline.PipelineType       `json:"type"`
-	Description string                      `json:"description"`
-	Stages      []pipeline.StageDefinition  `json:"stages"`
-	Metadata    map[string]interface{}      `json:"metadata,omitempty"`
-	Enabled     bool                        `json:"enabled"`
-	OnFailure   pipeline.FailurePolicy      `json:"on_failure,omitempty"`
-	Timeout     *time.Duration              `json:"timeout,omitempty"`
-	Created     time.Time                   `json:"created"`
-	Updated     time.Time                   `json:"updated"`
+	Name        string                     `json:"name"`
+	Version     string                     `json:"version"`
+	Type        pipeline.PipelineType      `json:"type"`
+	Description string                     `json:"description"`
+	Stages      []pipeline.StageDefinition `json:"stages"`
+	Metadata    map[string]interface{}     `json:"metadata,omitempty"`
+	Enabled     bool                       `json:"enabled"`
+	OnFailure   pipeline.FailurePolicy     `json:"on_failure,omitempty"`
+	Timeout     *time.Duration             `json:"timeout,omitempty"`
+	Created     time.Time                  `json:"created"`
+	Updated     time.Time                  `json:"updated"`
 }
 
 // PipelineExecuteRequest represents a pipeline test execution request
@@ -78,10 +78,10 @@ type PipelineExecuteRequest struct {
 
 // PipelineExecuteResponse represents a pipeline test execution response
 type PipelineExecuteResponse struct {
-	Output   interface{}    `json:"output"`
-	Duration time.Duration  `json:"duration_ms"`
-	Success  bool           `json:"success"`
-	Error    string         `json:"error,omitempty"`
+	Output   interface{}   `json:"output"`
+	Duration time.Duration `json:"duration_ms"`
+	Success  bool          `json:"success"`
+	Error    string        `json:"error,omitempty"`
 }
 
 // createPipeline handles POST /_pipelines/{name}

@@ -368,10 +368,10 @@ func TestSpathOperator_TypePreservation(t *testing.T) {
 		expected interface{}
 	}{
 		{"string_val", "str", "hello"},
-		{"int_val", "int", "42"},         // String per OpenSearch spec
-		{"float_val", "float", "3.14"},   // String per OpenSearch spec
-		{"bool_val", "bool", "true"},     // String per OpenSearch spec
-		{"null_val", "null", nil},        // null remains nil
+		{"int_val", "int", "42"},       // String per OpenSearch spec
+		{"float_val", "float", "3.14"}, // String per OpenSearch spec
+		{"bool_val", "bool", "true"},   // String per OpenSearch spec
+		{"null_val", "null", nil},      // null remains nil
 	}
 
 	for _, tt := range tests {

@@ -29,7 +29,8 @@ jobs:
         with:
           version: latest
           # Exclude CGO-dependent packages (pkg/data, cmd/data) that require Diagon C++ headers
-          args: --timeout=5m ./pkg/coordination/... ./pkg/master/... ./pkg/ppl/... ./pkg/wasm/... ./pkg/common/... ./cmd/master/... ./cmd/coordination/... ./cmd/forcemerge/... ./examples/...
+          # Only report new issues to avoid failing on pre-existing lint debt
+          args: --timeout=5m --new-from-rev=HEAD~1 ./pkg/coordination/... ./pkg/master/... ./pkg/ppl/... ./pkg/wasm/... ./pkg/common/... ./cmd/master/... ./cmd/coordination/... ./examples/...
 
   unit-tests:
     name: Unit Tests

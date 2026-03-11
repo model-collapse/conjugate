@@ -14,9 +14,9 @@ type UDFMetadata struct {
 	Author      string `json:"author"`
 
 	// Function signature
-	FunctionName string               `json:"function_name"` // Entry point in WASM module
-	Parameters   []UDFParameter       `json:"parameters"`
-	Returns      []UDFReturnType      `json:"returns"`
+	FunctionName string          `json:"function_name"` // Entry point in WASM module
+	Parameters   []UDFParameter  `json:"parameters"`
+	Returns      []UDFReturnType `json:"returns"`
 
 	// WASM module
 	WASMBytes []byte `json:"-"` // Raw WASM bytes (not serialized)
@@ -27,11 +27,11 @@ type UDFMetadata struct {
 	MemoryRequired  uint32        `json:"memory_required,omitempty"`  // Memory pages required
 
 	// Metadata
-	Tags        []string          `json:"tags,omitempty"`
-	Category    string            `json:"category,omitempty"`
-	License     string            `json:"license,omitempty"`
-	Repository  string            `json:"repository,omitempty"`
-	CustomMeta  map[string]string `json:"custom_meta,omitempty"`
+	Tags       []string          `json:"tags,omitempty"`
+	Category   string            `json:"category,omitempty"`
+	License    string            `json:"license,omitempty"`
+	Repository string            `json:"repository,omitempty"`
+	CustomMeta map[string]string `json:"custom_meta,omitempty"`
 
 	// Registration info
 	RegisteredAt time.Time `json:"registered_at"`
@@ -40,11 +40,11 @@ type UDFMetadata struct {
 
 // UDFParameter describes a function parameter
 type UDFParameter struct {
-	Name     string      `json:"name"`
-	Type     ValueType   `json:"type"`
-	Required bool        `json:"required"`
-	Default  interface{} `json:"default,omitempty"`
-	Description string   `json:"description,omitempty"`
+	Name        string      `json:"name"`
+	Type        ValueType   `json:"type"`
+	Required    bool        `json:"required"`
+	Default     interface{} `json:"default,omitempty"`
+	Description string      `json:"description,omitempty"`
 }
 
 // UDFReturnType describes a return value
@@ -218,17 +218,17 @@ func (m *UDFMetadata) Clone() *UDFMetadata {
 
 // UDFStats contains statistics about a UDF
 type UDFStats struct {
-	Name             string        `json:"name"`
-	Version          string        `json:"version"`
-	CallCount        uint64        `json:"call_count"`
-	ErrorCount       uint64        `json:"error_count"`
-	TotalDuration    time.Duration `json:"total_duration"`
-	AverageDuration  time.Duration `json:"average_duration"`
-	MinDuration      time.Duration `json:"min_duration"`
-	MaxDuration      time.Duration `json:"max_duration"`
-	LastCalled       time.Time     `json:"last_called"`
-	LastError        string        `json:"last_error,omitempty"`
-	LastErrorTime    time.Time     `json:"last_error_time,omitempty"`
+	Name            string        `json:"name"`
+	Version         string        `json:"version"`
+	CallCount       uint64        `json:"call_count"`
+	ErrorCount      uint64        `json:"error_count"`
+	TotalDuration   time.Duration `json:"total_duration"`
+	AverageDuration time.Duration `json:"average_duration"`
+	MinDuration     time.Duration `json:"min_duration"`
+	MaxDuration     time.Duration `json:"max_duration"`
+	LastCalled      time.Time     `json:"last_called"`
+	LastError       string        `json:"last_error,omitempty"`
+	LastErrorTime   time.Time     `json:"last_error_time,omitempty"`
 }
 
 // UpdateStats updates statistics after a UDF call

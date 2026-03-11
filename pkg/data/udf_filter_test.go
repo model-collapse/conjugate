@@ -209,9 +209,9 @@ func TestExtractWasmUDFQuery(t *testing.T) {
 	filter := NewUDFFilter(registry, logger)
 
 	tests := []struct {
-		name        string
-		query       string
-		expectUDF   bool
+		name         string
+		query        string
+		expectUDF    bool
 		expectedName string
 	}{
 		{
@@ -431,10 +431,10 @@ func TestConvertParameters(t *testing.T) {
 	filter := NewUDFFilter(registry, logger)
 
 	params := map[string]interface{}{
-		"field":   "product_name",
-		"target":  "iPhone",
+		"field":        "product_name",
+		"target":       "iPhone",
 		"max_distance": 3,
-		"enabled": true,
+		"enabled":      true,
 	}
 
 	values, err := filter.convertParameters(params)

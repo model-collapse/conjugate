@@ -17,12 +17,12 @@ type reverseOperator struct {
 	stats  *IteratorStats
 
 	// State
-	ctx     context.Context
-	buffer  []*Row // Buffer to hold all rows
-	index   int    // Current index for emitting rows
+	ctx      context.Context
+	buffer   []*Row // Buffer to hold all rows
+	index    int    // Current index for emitting rows
 	buffered bool   // True when all rows have been buffered
-	opened  bool
-	closed  bool
+	opened   bool
+	closed   bool
 }
 
 // NewReverseOperator creates a new reverse operator

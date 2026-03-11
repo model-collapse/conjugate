@@ -195,11 +195,11 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 	// Sum bucket counts across all shards, collecting sub-aggs per bucket
 	type bucketData struct {
 		count     int64
-		stringKey string                                // preserved for numeric-keyed date_histogram
-		subAggs   map[string][]*pb.AggregationResult    // sub-aggs grouped by name across shards
+		stringKey string                             // preserved for numeric-keyed date_histogram
+		subAggs   map[string][]*pb.AggregationResult // sub-aggs grouped by name across shards
 	}
 	bucketMap := make(map[string]*bucketData)         // for string keys (terms)
-	numericBucketMap := make(map[float64]*bucketData)  // for numeric keys (histogram, date_histogram)
+	numericBucketMap := make(map[float64]*bucketData) // for numeric keys (histogram, date_histogram)
 
 	isNumeric := aggType == "histogram" || aggType == "date_histogram"
 

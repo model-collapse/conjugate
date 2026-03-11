@@ -203,7 +203,7 @@ func TestAddtotalsOperator_MixedTypes(t *testing.T) {
 	age, _ := totalsRow.Get("age")
 	assert.Equal(t, float64(90), age) // 30 + 25 + 35
 	score, _ := totalsRow.Get("score")
-	assert.Equal(t, 275.8, score)      // 95.5 + 88.0 + 92.3
+	assert.Equal(t, 275.8, score) // 95.5 + 88.0 + 92.3
 	_, hasCity := totalsRow.Get("city")
 	assert.False(t, hasCity) // String field should not be totaled
 

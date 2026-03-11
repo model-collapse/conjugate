@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/conjugate/conjugate/pkg/coordination/parser"
 	pb "github.com/conjugate/conjugate/pkg/common/proto"
+	"github.com/conjugate/conjugate/pkg/coordination/parser"
 	"go.uber.org/zap"
 )
 
@@ -233,12 +233,12 @@ func (qp *QueryPlanner) optimizeBoolQuery(boolQuery *parser.BoolQuery) *parser.B
 	}
 
 	optimized := &parser.BoolQuery{
-		Must:                   make([]parser.Query, 0, len(boolQuery.Must)),
-		Should:                 make([]parser.Query, 0, len(boolQuery.Should)),
-		MustNot:                make([]parser.Query, 0, len(boolQuery.MustNot)),
-		Filter:                 make([]parser.Query, 0, len(boolQuery.Filter)),
-		MinimumShouldMatch:     boolQuery.MinimumShouldMatch,
-		MinimumShouldMatchStr:  boolQuery.MinimumShouldMatchStr,
+		Must:                  make([]parser.Query, 0, len(boolQuery.Must)),
+		Should:                make([]parser.Query, 0, len(boolQuery.Should)),
+		MustNot:               make([]parser.Query, 0, len(boolQuery.MustNot)),
+		Filter:                make([]parser.Query, 0, len(boolQuery.Filter)),
+		MinimumShouldMatch:    boolQuery.MinimumShouldMatch,
+		MinimumShouldMatchStr: boolQuery.MinimumShouldMatchStr,
 	}
 
 	// Move filters before must clauses (filters are faster)

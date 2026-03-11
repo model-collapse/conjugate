@@ -13,23 +13,23 @@ import (
 // subqueryInOperator filters rows based on IN subquery
 // Example: where status IN [search source=valid_statuses | fields status]
 type subqueryInOperator struct {
-	input          Operator
-	logger         *zap.Logger
-	ctx            context.Context
-	stats          *IteratorStats
-	opened         bool
-	closed         bool
-	fieldName      string            // Field to check
-	subqueryExec   *SubqueryExecutor
-	valueSet       map[interface{}]bool // Hash set for fast lookup
-	negate         bool              // If true, NOT IN
+	input        Operator
+	logger       *zap.Logger
+	ctx          context.Context
+	stats        *IteratorStats
+	opened       bool
+	closed       bool
+	fieldName    string // Field to check
+	subqueryExec *SubqueryExecutor
+	valueSet     map[interface{}]bool // Hash set for fast lookup
+	negate       bool                 // If true, NOT IN
 }
 
 // SubqueryInConfig holds configuration for IN subquery operator
 type SubqueryInConfig struct {
-	FieldName string          // Field to check
-	Subsearch Operator        // Subsearch pipeline
-	Negate    bool            // If true, NOT IN
+	FieldName string   // Field to check
+	Subsearch Operator // Subsearch pipeline
+	Negate    bool     // If true, NOT IN
 }
 
 // NewSubqueryInOperator creates a new IN subquery operator

@@ -20,10 +20,10 @@ type ResourceLimits struct {
 // DefaultResourceLimits returns sensible default limits
 func DefaultResourceLimits() *ResourceLimits {
 	return &ResourceLimits{
-		MaxMemoryPages:   256,              // 16MB (256 * 64KB)
-		MaxExecutionTime: 5 * time.Second,  // 5 seconds max
-		MaxStackDepth:    1024,             // 1024 call frames
-		MaxInstances:     100,              // 100 concurrent instances
+		MaxMemoryPages:   256,             // 16MB (256 * 64KB)
+		MaxExecutionTime: 5 * time.Second, // 5 seconds max
+		MaxStackDepth:    1024,            // 1024 call frames
+		MaxInstances:     100,             // 100 concurrent instances
 	}
 }
 
@@ -154,8 +154,8 @@ func VerifyWASM(wasmBytes []byte, sig *UDFSignature) error {
 // ExecutionLimiter enforces resource limits during UDF execution
 type ExecutionLimiter struct {
 	limits        *ResourceLimits
-	instances     sync.Map              // instanceID -> instanceInfo
-	instanceCount map[string]int        // udfName -> count
+	instances     sync.Map       // instanceID -> instanceInfo
+	instanceCount map[string]int // udfName -> count
 	mu            sync.Mutex
 }
 
@@ -238,21 +238,21 @@ func (el *ExecutionLimiter) ExecuteWithLimits(ctx context.Context, fn func() err
 
 // AuditLog represents a log entry for UDF operations
 type AuditLog struct {
-	Timestamp   time.Time         // When the operation occurred
-	Operation   string            // Operation type (register, call, delete, etc.)
-	UDFName     string            // UDF name
-	UDFVersion  string            // UDF version
-	User        string            // User who performed the operation
-	Success     bool              // Whether the operation succeeded
-	Error       string            // Error message if failed
-	Duration    time.Duration     // How long the operation took
-	Metadata    map[string]string // Additional metadata
+	Timestamp  time.Time         // When the operation occurred
+	Operation  string            // Operation type (register, call, delete, etc.)
+	UDFName    string            // UDF name
+	UDFVersion string            // UDF version
+	User       string            // User who performed the operation
+	Success    bool              // Whether the operation succeeded
+	Error      string            // Error message if failed
+	Duration   time.Duration     // How long the operation took
+	Metadata   map[string]string // Additional metadata
 }
 
 // AuditLogger logs UDF operations for security and compliance
 type AuditLogger struct {
-	logs   []AuditLog
-	mu     sync.RWMutex
+	logs    []AuditLog
+	mu      sync.RWMutex
 	maxLogs int
 }
 

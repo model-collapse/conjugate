@@ -22,43 +22,43 @@ type MetricsCollector struct {
 	HTTPResponseSize    *prometheus.HistogramVec
 
 	// Query metrics
-	QueryTotal          *prometheus.CounterVec
-	QueryDuration       *prometheus.HistogramVec
-	QueryComplexity     *prometheus.HistogramVec
-	QueryCacheHits      prometheus.Counter
-	QueryCacheMisses    prometheus.Counter
-	QueryShardCount     *prometheus.HistogramVec
+	QueryTotal       *prometheus.CounterVec
+	QueryDuration    *prometheus.HistogramVec
+	QueryComplexity  *prometheus.HistogramVec
+	QueryCacheHits   prometheus.Counter
+	QueryCacheMisses prometheus.Counter
+	QueryShardCount  *prometheus.HistogramVec
 
 	// Bulk operation metrics
-	BulkOperationsTotal *prometheus.CounterVec
-	BulkOperationsDuration prometheus.Histogram
+	BulkOperationsTotal      *prometheus.CounterVec
+	BulkOperationsDuration   prometheus.Histogram
 	BulkOperationsPerRequest *prometheus.HistogramVec
 
 	// Document operation metrics
-	DocumentsIndexed    *prometheus.CounterVec
-	DocumentsDeleted    *prometheus.CounterVec
-	DocumentsRetrieved  *prometheus.CounterVec
+	DocumentsIndexed   *prometheus.CounterVec
+	DocumentsDeleted   *prometheus.CounterVec
+	DocumentsRetrieved *prometheus.CounterVec
 
 	// Cluster metrics
-	ClusterNodes        *prometheus.GaugeVec
-	ClusterShards       *prometheus.GaugeVec
-	ClusterDocuments    prometheus.Gauge
-	ClusterIndices      prometheus.Gauge
+	ClusterNodes     *prometheus.GaugeVec
+	ClusterShards    *prometheus.GaugeVec
+	ClusterDocuments prometheus.Gauge
+	ClusterIndices   prometheus.Gauge
 
 	// Shard metrics
-	ShardOperations     *prometheus.CounterVec
-	ShardSize           *prometheus.GaugeVec
-	ShardDocuments      *prometheus.GaugeVec
+	ShardOperations *prometheus.CounterVec
+	ShardSize       *prometheus.GaugeVec
+	ShardDocuments  *prometheus.GaugeVec
 
 	// gRPC metrics
 	GRPCRequestsTotal   *prometheus.CounterVec
 	GRPCRequestDuration *prometheus.HistogramVec
 
 	// Raft metrics (for master nodes)
-	RaftLeader          prometheus.Gauge
-	RaftTerm            prometheus.Gauge
-	RaftCommitIndex     prometheus.Gauge
-	RaftAppliedIndex    prometheus.Gauge
+	RaftLeader       prometheus.Gauge
+	RaftTerm         prometheus.Gauge
+	RaftCommitIndex  prometheus.Gauge
+	RaftAppliedIndex prometheus.Gauge
 }
 
 // NewMetricsCollector creates a new metrics collector for a component using the default registry

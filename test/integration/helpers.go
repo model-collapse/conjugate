@@ -141,8 +141,8 @@ type ShardInfo struct {
 
 // HitsWrapper wraps the hits response
 type HitsWrapper struct {
-	Total    TotalHits              `json:"total"`
-	MaxScore *float64               `json:"max_score"`
+	Total    TotalHits                `json:"total"`
+	MaxScore *float64                 `json:"max_score"`
 	Hits     []map[string]interface{} `json:"hits"`
 }
 

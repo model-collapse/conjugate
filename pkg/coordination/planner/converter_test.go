@@ -560,8 +560,8 @@ func TestEstimateSelectivity(t *testing.T) {
 	converter := NewConverter()
 
 	tests := []struct {
-		name       string
-		query      parser.Query
+		name        string
+		query       parser.Query
 		selectivity float64
 	}{
 		{

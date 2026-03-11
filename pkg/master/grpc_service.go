@@ -16,15 +16,15 @@ import (
 // MasterService implements the gRPC MasterService
 type MasterService struct {
 	pb.UnimplementedMasterServiceServer
-	node      *MasterNode
-	logger    *zap.Logger
+	node   *MasterNode
+	logger *zap.Logger
 }
 
 // NewMasterService creates a new master service
 func NewMasterService(node *MasterNode, logger *zap.Logger) *MasterService {
 	return &MasterService{
-		node:      node,
-		logger:    logger,
+		node:   node,
+		logger: logger,
 	}
 }
 
@@ -65,10 +65,10 @@ func (s *MasterService) GetClusterState(ctx context.Context, req *pb.GetClusterS
 	// Add master node info
 	if s.node.IsLeader() {
 		resp.MasterNode = &pb.MasterNode{
-			NodeId:     s.node.cfg.NodeID,
-			NodeName:   s.node.cfg.NodeID,
-			ElectedAt:  timestamppb.Now(),
-			Term:       1, // TODO: Get actual term from Raft
+			NodeId:    s.node.cfg.NodeID,
+			NodeName:  s.node.cfg.NodeID,
+			ElectedAt: timestamppb.Now(),
+			Term:      1, // TODO: Get actual term from Raft
 		}
 	}
 
@@ -451,14 +451,14 @@ func (s *MasterService) convertNodesToProto(nodes map[string]*raft.NodeMeta) []*
 	result := make([]*pb.NodeInfo, 0, len(nodes))
 	for _, node := range nodes {
 		result = append(result, &pb.NodeInfo{
-			NodeId:    node.NodeID,
-			NodeName:  node.NodeID,
-			NodeType:  s.convertNodeTypeToProto(node.NodeType),
-			BindAddr:  node.BindAddr,
-			GrpcPort:  node.GRPCPort,
-			Status:    s.convertNodeStatusToProto(node.Status),
-			JoinedAt:  timestamppb.New(time.Unix(node.JoinedAt, 0)),
-			LastSeen:  timestamppb.New(time.Unix(node.LastSeen, 0)),
+			NodeId:   node.NodeID,
+			NodeName: node.NodeID,
+			NodeType: s.convertNodeTypeToProto(node.NodeType),
+			BindAddr: node.BindAddr,
+			GrpcPort: node.GRPCPort,
+			Status:   s.convertNodeStatusToProto(node.Status),
+			JoinedAt: timestamppb.New(time.Unix(node.JoinedAt, 0)),
+			LastSeen: timestamppb.New(time.Unix(node.LastSeen, 0)),
 		})
 	}
 	return result

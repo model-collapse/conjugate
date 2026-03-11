@@ -13,8 +13,8 @@ type ConnectionPool struct {
 	clients     map[string]*DataNodeClient // nodeID -> client
 	mu          sync.RWMutex
 	logger      *zap.Logger
-	preConnect  bool   // Whether to pre-connect during registration
-	healthCheck bool   // Whether to run periodic health checks
+	preConnect  bool // Whether to pre-connect during registration
+	healthCheck bool // Whether to run periodic health checks
 	stopChan    chan struct{}
 	wg          sync.WaitGroup
 }
@@ -238,9 +238,9 @@ func (cp *ConnectionPool) Stats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_clients":      len(cp.clients),
-		"connected":          connected,
-		"disconnected":       disconnected,
+		"total_clients":        len(cp.clients),
+		"connected":            connected,
+		"disconnected":         disconnected,
 		"health_check_enabled": cp.healthCheck,
 		"pre_connect_enabled":  cp.preConnect,
 	}

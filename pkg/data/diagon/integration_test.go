@@ -306,9 +306,9 @@ func TestDiagonPerformance(t *testing.T) {
 
 	for i := 0; i < numDocs; i++ {
 		doc := map[string]interface{}{
-			"id":      i,
-			"title":   fmt.Sprintf("Document %d", i),
-			"content": fmt.Sprintf("This is the content of document %d with some searchable terms", i),
+			"id":       i,
+			"title":    fmt.Sprintf("Document %d", i),
+			"content":  fmt.Sprintf("This is the content of document %d with some searchable terms", i),
 			"category": []string{"tech", "science", "programming"}[i%3],
 		}
 

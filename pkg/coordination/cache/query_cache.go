@@ -388,11 +388,11 @@ func normalizeQuery(query parser.Query) interface{} {
 		}
 	case *parser.BoolQuery:
 		return map[string]interface{}{
-			"type":               "bool",
-			"must":               normalizeQueryList(q.Must),
-			"should":             normalizeQueryList(q.Should),
-			"must_not":           normalizeQueryList(q.MustNot),
-			"filter":             normalizeQueryList(q.Filter),
+			"type":                 "bool",
+			"must":                 normalizeQueryList(q.Must),
+			"should":               normalizeQueryList(q.Should),
+			"must_not":             normalizeQueryList(q.MustNot),
+			"filter":               normalizeQueryList(q.Filter),
 			"minimum_should_match": q.MinimumShouldMatch,
 		}
 	case *parser.MatchAllQuery:

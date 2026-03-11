@@ -10,8 +10,8 @@ import (
 func TestFilterPushdownRule(t *testing.T) {
 	// Create a filter over a scan
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -21,7 +21,7 @@ func TestFilterPushdownRule(t *testing.T) {
 			Field: "category",
 			Value: "electronics",
 		},
-		Child:       scan,
+		Child:         scan,
 		EstimatedRows: 2000,
 	}
 
@@ -43,8 +43,8 @@ func TestFilterPushdownRule(t *testing.T) {
 func TestFilterPushdownDoesNotApplyToNonScan(t *testing.T) {
 	// Create a filter over a project (not a scan)
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -59,7 +59,7 @@ func TestFilterPushdownDoesNotApplyToNonScan(t *testing.T) {
 			Field: "category",
 			Value: "electronics",
 		},
-		Child:       project,
+		Child:         project,
 		EstimatedRows: 2000,
 	}
 
@@ -73,8 +73,8 @@ func TestFilterPushdownDoesNotApplyToNonScan(t *testing.T) {
 
 func TestRedundantFilterElimination(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -83,7 +83,7 @@ func TestRedundantFilterElimination(t *testing.T) {
 		Condition: &Expression{
 			Type: ExprTypeMatchAll,
 		},
-		Child:       scan,
+		Child:         scan,
 		EstimatedRows: 10000,
 	}
 
@@ -99,8 +99,8 @@ func TestRedundantFilterElimination(t *testing.T) {
 
 func TestProjectionMergingRule(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -137,8 +137,8 @@ func TestOptimizer(t *testing.T) {
 	// Filter (match_all) -> Filter (term) -> Scan
 
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -148,7 +148,7 @@ func TestOptimizer(t *testing.T) {
 			Field: "category",
 			Value: "electronics",
 		},
-		Child:       scan,
+		Child:         scan,
 		EstimatedRows: 2000,
 	}
 
@@ -156,7 +156,7 @@ func TestOptimizer(t *testing.T) {
 		Condition: &Expression{
 			Type: ExprTypeMatchAll,
 		},
-		Child:       filter1,
+		Child:         filter1,
 		EstimatedRows: 2000,
 	}
 
@@ -181,8 +181,8 @@ func TestOptimizer(t *testing.T) {
 
 func TestOptimizerMaxPasses(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -192,7 +192,7 @@ func TestOptimizerMaxPasses(t *testing.T) {
 			Field: "category",
 			Value: "electronics",
 		},
-		Child:       scan,
+		Child:         scan,
 		EstimatedRows: 2000,
 	}
 
@@ -248,8 +248,8 @@ func TestComplexOptimization(t *testing.T) {
 	// Project -> Filter (match_all) -> Filter (term) -> Scan
 
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 100000,
 	}
 
@@ -259,7 +259,7 @@ func TestComplexOptimization(t *testing.T) {
 			Field: "category",
 			Value: "electronics",
 		},
-		Child:       scan,
+		Child:         scan,
 		EstimatedRows: 20000,
 	}
 
@@ -267,7 +267,7 @@ func TestComplexOptimization(t *testing.T) {
 		Condition: &Expression{
 			Type: ExprTypeMatchAll,
 		},
-		Child:       filter1,
+		Child:         filter1,
 		EstimatedRows: 20000,
 	}
 

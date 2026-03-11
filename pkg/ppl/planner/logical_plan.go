@@ -25,12 +25,12 @@ type LogicalPlan interface {
 
 // LogicalScan reads data from a source (index)
 type LogicalScan struct {
-	Source      string
+	Source       string
 	OutputSchema *analyzer.Schema
 }
 
-func (l *LogicalScan) Schema() *analyzer.Schema  { return l.OutputSchema }
-func (l *LogicalScan) Children() []LogicalPlan   { return nil }
+func (l *LogicalScan) Schema() *analyzer.Schema { return l.OutputSchema }
+func (l *LogicalScan) Children() []LogicalPlan  { return nil }
 func (l *LogicalScan) String() string {
 	return fmt.Sprintf("Scan(%s)", l.Source)
 }
@@ -387,13 +387,13 @@ func (l *LogicalBin) String() string {
 
 // LogicalTop returns the most frequent values for specified fields
 type LogicalTop struct {
-	Fields      []ast.Expression
-	Limit       int
-	GroupBy     []ast.Expression
-	ShowCount   bool
-	ShowPercent bool
+	Fields       []ast.Expression
+	Limit        int
+	GroupBy      []ast.Expression
+	ShowCount    bool
+	ShowPercent  bool
 	OutputSchema *analyzer.Schema
-	Input       LogicalPlan
+	Input        LogicalPlan
 }
 
 func (l *LogicalTop) Schema() *analyzer.Schema { return l.OutputSchema }
@@ -417,13 +417,13 @@ func (l *LogicalTop) String() string {
 
 // LogicalRare returns the least frequent values for specified fields
 type LogicalRare struct {
-	Fields      []ast.Expression
-	Limit       int
-	GroupBy     []ast.Expression
-	ShowCount   bool
-	ShowPercent bool
+	Fields       []ast.Expression
+	Limit        int
+	GroupBy      []ast.Expression
+	ShowCount    bool
+	ShowPercent  bool
 	OutputSchema *analyzer.Schema
-	Input       LogicalPlan
+	Input        LogicalPlan
 }
 
 func (l *LogicalRare) Schema() *analyzer.Schema { return l.OutputSchema }
@@ -531,11 +531,11 @@ func (l *LogicalFillnull) String() string {
 
 // LogicalParse extracts fields from text using regex patterns
 type LogicalParse struct {
-	SourceField  string
-	Pattern      string
+	SourceField     string
+	Pattern         string
 	ExtractedFields []string // Field names extracted from named capture groups
-	OutputSchema *analyzer.Schema
-	Input        LogicalPlan
+	OutputSchema    *analyzer.Schema
+	Input           LogicalPlan
 }
 
 func (l *LogicalParse) Schema() *analyzer.Schema { return l.OutputSchema }
@@ -709,6 +709,7 @@ func (l *LogicalStreamstats) String() string {
 	result += ")"
 	return result
 }
+
 // LogicalReverse reverses the order of rows in the result set
 type LogicalReverse struct {
 	Input        LogicalPlan
@@ -724,7 +725,7 @@ func (l *LogicalReverse) String() string {
 // LogicalFlatten flattens nested arrays/objects into separate rows
 type LogicalFlatten struct {
 	Input        LogicalPlan
-	Field        ast.Expression   // Field to flatten
+	Field        ast.Expression // Field to flatten
 	OutputSchema *analyzer.Schema
 }
 

@@ -31,12 +31,12 @@ type CostModel struct {
 	MemoryWeight  float64
 
 	// Performance parameters
-	SeqReadCost      float64 // Cost per row for sequential read
-	RandomReadCost   float64 // Cost per row for random read
-	NetworkLatency   float64 // Network latency cost per node
-	HashTableCost    float64 // Cost per row for hash table operations
-	ComparisonCost   float64 // Cost per comparison
-	AggregationCost  float64 // Cost per aggregation operation
+	SeqReadCost     float64 // Cost per row for sequential read
+	RandomReadCost  float64 // Cost per row for random read
+	NetworkLatency  float64 // Network latency cost per node
+	HashTableCost   float64 // Cost per row for hash table operations
+	ComparisonCost  float64 // Cost per comparison
+	AggregationCost float64 // Cost per aggregation operation
 }
 
 // NewDefaultCostModel creates a cost model with default parameters
@@ -44,17 +44,17 @@ func NewDefaultCostModel() *CostModel {
 	return &CostModel{
 		// Weights (tuned based on actual performance)
 		CPUWeight:     1.0,
-		IOWeight:      5.0,   // I/O is 5× more expensive than CPU
-		NetworkWeight: 10.0,  // Network is 10× more expensive than CPU
-		MemoryWeight:  2.0,   // Memory is 2× more expensive than CPU
+		IOWeight:      5.0,  // I/O is 5× more expensive than CPU
+		NetworkWeight: 10.0, // Network is 10× more expensive than CPU
+		MemoryWeight:  2.0,  // Memory is 2× more expensive than CPU
 
 		// Performance parameters (based on benchmarks)
-		SeqReadCost:      0.001,  // 0.001 cost per row for sequential read
-		RandomReadCost:   0.01,   // 0.01 cost per row for random read
-		NetworkLatency:   1.0,    // 1.0 cost for network latency per node
-		HashTableCost:    0.002,  // 0.002 cost per row for hash operations
-		ComparisonCost:   0.0001, // 0.0001 cost per comparison
-		AggregationCost:  0.005,  // 0.005 cost per aggregation
+		SeqReadCost:     0.001,  // 0.001 cost per row for sequential read
+		RandomReadCost:  0.01,   // 0.01 cost per row for random read
+		NetworkLatency:  1.0,    // 1.0 cost for network latency per node
+		HashTableCost:   0.002,  // 0.002 cost per row for hash operations
+		ComparisonCost:  0.0001, // 0.0001 cost per comparison
+		AggregationCost: 0.005,  // 0.005 cost per aggregation
 	}
 }
 

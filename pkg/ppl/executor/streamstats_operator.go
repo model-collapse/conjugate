@@ -18,9 +18,9 @@ type streamstatsOperator struct {
 	input        Operator
 	groupBy      []ast.Expression
 	aggregations []*ast.Aggregation
-	window       int         // Window size for rolling aggregations (0 = unbounded)
-	current      bool        // Include current event in calculation (default: true)
-	global       bool        // Compute stats globally, ignore grouping (default: false)
+	window       int            // Window size for rolling aggregations (0 = unbounded)
+	current      bool           // Include current event in calculation (default: true)
+	global       bool           // Compute stats globally, ignore grouping (default: false)
 	resetBefore  ast.Expression // Reset statistics before this condition
 	resetAfter   ast.Expression // Reset statistics after this condition
 	logger       *zap.Logger

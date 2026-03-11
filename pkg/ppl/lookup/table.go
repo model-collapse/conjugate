@@ -16,9 +16,9 @@ import (
 // LookupTable represents an in-memory lookup table with hash-based indexing
 type LookupTable struct {
 	Name   string
-	Fields []string                       // Column names
+	Fields []string                          // Column names
 	Index  map[string]map[string]interface{} // key -> {field -> value}
-	mu     sync.RWMutex                   // Protect concurrent access
+	mu     sync.RWMutex                      // Protect concurrent access
 	logger *zap.Logger
 }
 

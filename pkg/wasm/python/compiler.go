@@ -42,22 +42,22 @@ const (
 
 // UDFMetadata contains metadata extracted from Python source
 type UDFMetadata struct {
-	Name        string          `json:"name"`
-	Version     string          `json:"version"`
-	Description string          `json:"description"`
-	Author      string          `json:"author"`
-	Category    string          `json:"category"` // "filter", "scorer", "aggregator"
-	Parameters  []ParameterDef  `json:"parameters"`
-	Returns     []ReturnDef     `json:"returns"`
-	Tags        []string        `json:"tags"`
-	Language    string          `json:"language"` // "python"
-	Created     time.Time       `json:"created"`
+	Name        string         `json:"name"`
+	Version     string         `json:"version"`
+	Description string         `json:"description"`
+	Author      string         `json:"author"`
+	Category    string         `json:"category"` // "filter", "scorer", "aggregator"
+	Parameters  []ParameterDef `json:"parameters"`
+	Returns     []ReturnDef    `json:"returns"`
+	Tags        []string       `json:"tags"`
+	Language    string         `json:"language"` // "python"
+	Created     time.Time      `json:"created"`
 }
 
 // ParameterDef defines a UDF parameter
 type ParameterDef struct {
 	Name        string      `json:"name"`
-	Type        string      `json:"type"`        // "string", "i64", "f64", "bool"
+	Type        string      `json:"type"` // "string", "i64", "f64", "bool"
 	Required    bool        `json:"required"`
 	Default     interface{} `json:"default,omitempty"`
 	Description string      `json:"description,omitempty"`

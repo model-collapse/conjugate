@@ -2,15 +2,15 @@ package parser
 
 // SearchRequest represents a complete search request
 type SearchRequest struct {
-	Query       map[string]interface{}   `json:"query,omitempty"`
-	Size        int                      `json:"size,omitempty"`
-	From        int                      `json:"from,omitempty"`
-	Sort        []map[string]interface{} `json:"sort,omitempty"`
-	Source      interface{}              `json:"_source,omitempty"`
-	Aggregations map[string]interface{}  `json:"aggregations,omitempty"`
-	Aggs        map[string]interface{}   `json:"aggs,omitempty"` // Alias for aggregations
-	Highlight   map[string]interface{}   `json:"highlight,omitempty"`
-	Timeout     string                   `json:"timeout,omitempty"`
+	Query        map[string]interface{}   `json:"query,omitempty"`
+	Size         int                      `json:"size,omitempty"`
+	From         int                      `json:"from,omitempty"`
+	Sort         []map[string]interface{} `json:"sort,omitempty"`
+	Source       interface{}              `json:"_source,omitempty"`
+	Aggregations map[string]interface{}   `json:"aggregations,omitempty"`
+	Aggs         map[string]interface{}   `json:"aggs,omitempty"` // Alias for aggregations
+	Highlight    map[string]interface{}   `json:"highlight,omitempty"`
+	Timeout      string                   `json:"timeout,omitempty"`
 
 	// Parsed query (not from JSON)
 	ParsedQuery Query `json:"-"`
@@ -29,7 +29,7 @@ type Query interface {
 type MatchQuery struct {
 	Field    string
 	Query    string
-	Operator string  // "and" or "or"
+	Operator string // "and" or "or"
 	Boost    float64
 	Analyzer string
 }
@@ -121,9 +121,9 @@ func (q *WildcardQuery) QueryType() string { return "wildcard" }
 
 // FuzzyQuery represents a fuzzy query
 type FuzzyQuery struct {
-	Field      string
-	Value      string
-	Fuzziness  string // "AUTO", "0", "1", "2"
+	Field     string
+	Value     string
+	Fuzziness string // "AUTO", "0", "1", "2"
 }
 
 func (q *FuzzyQuery) QueryType() string { return "fuzzy" }
@@ -134,12 +134,12 @@ func (q *FuzzyQuery) QueryType() string { return "fuzzy" }
 
 // BoolQuery represents a bool query (boolean combinations)
 type BoolQuery struct {
-	Must                   []Query
-	Should                 []Query
-	MustNot                []Query
-	Filter                 []Query
-	MinimumShouldMatch     int
-	MinimumShouldMatchStr  string // Can be "75%" or "3<90%"
+	Must                  []Query
+	Should                []Query
+	MustNot               []Query
+	Filter                []Query
+	MinimumShouldMatch    int
+	MinimumShouldMatchStr string // Can be "75%" or "3<90%"
 }
 
 func (q *BoolQuery) QueryType() string { return "bool" }

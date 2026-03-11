@@ -19,11 +19,11 @@ import (
 // mockMasterServer implements a mock MasterServiceServer for testing
 type mockMasterServer struct {
 	pb.UnimplementedMasterServiceServer
-	registerFunc    func(*pb.RegisterNodeRequest) (*pb.RegisterNodeResponse, error)
-	heartbeatFunc   func(*pb.NodeHeartbeatRequest) (*pb.NodeHeartbeatResponse, error)
-	unregisterFunc  func(*pb.UnregisterNodeRequest) (*pb.UnregisterNodeResponse, error)
-	getStateFunc    func(*pb.GetClusterStateRequest) (*pb.ClusterStateResponse, error)
-	getIndexFunc    func(*pb.GetIndexMetadataRequest) (*pb.IndexMetadataResponse, error)
+	registerFunc   func(*pb.RegisterNodeRequest) (*pb.RegisterNodeResponse, error)
+	heartbeatFunc  func(*pb.NodeHeartbeatRequest) (*pb.NodeHeartbeatResponse, error)
+	unregisterFunc func(*pb.UnregisterNodeRequest) (*pb.UnregisterNodeResponse, error)
+	getStateFunc   func(*pb.GetClusterStateRequest) (*pb.ClusterStateResponse, error)
+	getIndexFunc   func(*pb.GetIndexMetadataRequest) (*pb.IndexMetadataResponse, error)
 }
 
 func (m *mockMasterServer) RegisterNode(ctx context.Context, req *pb.RegisterNodeRequest) (*pb.RegisterNodeResponse, error) {

@@ -234,7 +234,7 @@ func (r *ConstantFoldingRule) foldExpression(expr ast.Expression) ast.Expression
 			// Evaluate unary constant
 			if e.Operator == "NOT" && operandLit.LiteralTyp == ast.LiteralTypeBool {
 				return &ast.Literal{
-					Value:       !operandLit.Value.(bool),
+					Value:      !operandLit.Value.(bool),
 					LiteralTyp: ast.LiteralTypeBool,
 				}
 			}
@@ -287,7 +287,7 @@ func (r *ConstantFoldingRule) evaluateConstant(left, right *ast.Literal, op stri
 	}
 
 	return &ast.Literal{
-		Value:       result,
+		Value:      result,
 		LiteralTyp: ast.LiteralTypeInt,
 	}
 }

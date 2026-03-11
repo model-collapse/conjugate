@@ -67,9 +67,9 @@ func (l *ErrorListener) SyntaxError(recognizer antlr.Recognizer, offendingSymbol
 func (l *ErrorListener) enhanceErrorMessage(msg string) string {
 	// Common error patterns and their improvements
 	replacements := map[string]string{
-		"mismatched input":    "unexpected token",
-		"missing":             "expected",
-		"extraneous input":    "unexpected",
+		"mismatched input":      "unexpected token",
+		"missing":               "expected",
+		"extraneous input":      "unexpected",
 		"no viable alternative": "invalid syntax",
 	}
 

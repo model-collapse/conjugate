@@ -65,14 +65,14 @@ const (
 
 // LogicalScan represents a scan operation on an index
 type LogicalScan struct {
-	IndexName        string
-	Shards           []int32
-	Filter           *Expression // Optional filter expression (pushdown)
-	EstimatedRows    int64       // Estimated number of rows
+	IndexName     string
+	Shards        []int32
+	Filter        *Expression // Optional filter expression (pushdown)
+	EstimatedRows int64       // Estimated number of rows
 }
 
-func (s *LogicalScan) Type() PlanType               { return PlanTypeScan }
-func (s *LogicalScan) Children() []LogicalPlan      { return nil }
+func (s *LogicalScan) Type() PlanType          { return PlanTypeScan }
+func (s *LogicalScan) Children() []LogicalPlan { return nil }
 func (s *LogicalScan) SetChild(int, LogicalPlan) error {
 	return fmt.Errorf("scan node has no children")
 }
@@ -101,7 +101,7 @@ func (f *LogicalFilter) SetChild(index int, child LogicalPlan) error {
 	f.Child = child
 	return nil
 }
-func (f *LogicalFilter) Schema() *Schema  { return f.Child.Schema() }
+func (f *LogicalFilter) Schema() *Schema    { return f.Child.Schema() }
 func (f *LogicalFilter) Cardinality() int64 { return f.EstimatedRows }
 func (f *LogicalFilter) String() string {
 	return fmt.Sprintf("Filter(condition=%v)", f.Condition)
@@ -109,8 +109,8 @@ func (f *LogicalFilter) String() string {
 
 // LogicalProject represents a projection operation (select specific fields)
 type LogicalProject struct {
-	Fields      []string // Field names to project
-	Child       LogicalPlan
+	Fields       []string // Field names to project
+	Child        LogicalPlan
 	OutputSchema *Schema
 }
 
@@ -123,7 +123,7 @@ func (p *LogicalProject) SetChild(index int, child LogicalPlan) error {
 	p.Child = child
 	return nil
 }
-func (p *LogicalProject) Schema() *Schema { return p.OutputSchema }
+func (p *LogicalProject) Schema() *Schema    { return p.OutputSchema }
 func (p *LogicalProject) Cardinality() int64 { return p.Child.Cardinality() }
 func (p *LogicalProject) String() string {
 	return fmt.Sprintf("Project(fields=%v)", p.Fields)
@@ -133,23 +133,23 @@ func (p *LogicalProject) String() string {
 type AggregationType string
 
 const (
-	AggTypeCount          AggregationType = "count"
-	AggTypeSum            AggregationType = "sum"
-	AggTypeAvg            AggregationType = "avg"
-	AggTypeMin            AggregationType = "min"
-	AggTypeMax            AggregationType = "max"
-	AggTypeTerms          AggregationType = "terms"
-	AggTypeStats          AggregationType = "stats"
-	AggTypeHistogram      AggregationType = "histogram"
-	AggTypeDateHistogram  AggregationType = "date_histogram"
-	AggTypePercentiles    AggregationType = "percentiles"
-	AggTypeCardinality        AggregationType = "cardinality"
-	AggTypeExtendedStats      AggregationType = "extended_stats"
-	AggTypeRange              AggregationType = "range"
-	AggTypeAutoDateHistogram  AggregationType = "auto_date_histogram"
-	AggTypeComposite          AggregationType = "composite"
-	AggTypeSignificantTerms   AggregationType = "significant_terms"
-	AggTypeMultiTerms         AggregationType = "multi_terms"
+	AggTypeCount             AggregationType = "count"
+	AggTypeSum               AggregationType = "sum"
+	AggTypeAvg               AggregationType = "avg"
+	AggTypeMin               AggregationType = "min"
+	AggTypeMax               AggregationType = "max"
+	AggTypeTerms             AggregationType = "terms"
+	AggTypeStats             AggregationType = "stats"
+	AggTypeHistogram         AggregationType = "histogram"
+	AggTypeDateHistogram     AggregationType = "date_histogram"
+	AggTypePercentiles       AggregationType = "percentiles"
+	AggTypeCardinality       AggregationType = "cardinality"
+	AggTypeExtendedStats     AggregationType = "extended_stats"
+	AggTypeRange             AggregationType = "range"
+	AggTypeAutoDateHistogram AggregationType = "auto_date_histogram"
+	AggTypeComposite         AggregationType = "composite"
+	AggTypeSignificantTerms  AggregationType = "significant_terms"
+	AggTypeMultiTerms        AggregationType = "multi_terms"
 )
 
 // Aggregation represents an aggregation operation
@@ -163,9 +163,9 @@ type Aggregation struct {
 
 // LogicalAggregate represents an aggregation operation
 type LogicalAggregate struct {
-	GroupBy     []string      // Fields to group by
+	GroupBy      []string       // Fields to group by
 	Aggregations []*Aggregation // Aggregations to compute
-	Child       LogicalPlan
+	Child        LogicalPlan
 	OutputSchema *Schema
 }
 
@@ -216,7 +216,7 @@ func (s *LogicalSort) SetChild(index int, child LogicalPlan) error {
 	s.Child = child
 	return nil
 }
-func (s *LogicalSort) Schema() *Schema  { return s.Child.Schema() }
+func (s *LogicalSort) Schema() *Schema    { return s.Child.Schema() }
 func (s *LogicalSort) Cardinality() int64 { return s.Child.Cardinality() }
 func (s *LogicalSort) String() string {
 	return fmt.Sprintf("Sort(fields=%d)", len(s.SortFields))
@@ -257,9 +257,9 @@ func (l *LogicalLimit) String() string {
 // LogicalTopN represents a TopN operation (optimized limit + sort)
 // More efficient than separate Sort + Limit for small N
 type LogicalTopN struct {
-	N          int64         // Number of results to return
-	Offset     int64         // Offset for pagination
-	SortFields []*SortField  // Fields to sort by
+	N          int64        // Number of results to return
+	Offset     int64        // Offset for pagination
+	SortFields []*SortField // Fields to sort by
 	Child      LogicalPlan
 }
 
@@ -301,14 +301,14 @@ type Expression struct {
 type ExpressionType string
 
 const (
-	ExprTypeTerm       ExpressionType = "term"
-	ExprTypeMatch      ExpressionType = "match"
-	ExprTypeRange      ExpressionType = "range"
-	ExprTypeBool       ExpressionType = "bool"
-	ExprTypeWildcard   ExpressionType = "wildcard"
-	ExprTypePrefix     ExpressionType = "prefix"
-	ExprTypeExists     ExpressionType = "exists"
-	ExprTypeMatchAll   ExpressionType = "match_all"
+	ExprTypeTerm     ExpressionType = "term"
+	ExprTypeMatch    ExpressionType = "match"
+	ExprTypeRange    ExpressionType = "range"
+	ExprTypeBool     ExpressionType = "bool"
+	ExprTypeWildcard ExpressionType = "wildcard"
+	ExprTypePrefix   ExpressionType = "prefix"
+	ExprTypeExists   ExpressionType = "exists"
+	ExprTypeMatchAll ExpressionType = "match_all"
 )
 
 func (e *Expression) String() string {

@@ -434,8 +434,8 @@ func TestAllAggregationTypesDistributed(t *testing.T) {
 			"aggs": map[string]interface{}{
 				"price_percentiles": map[string]interface{}{
 					"percentiles": map[string]interface{}{
-						"field":      "price",
-						"percents":   []float64{25, 50, 75, 95, 99},
+						"field":    "price",
+						"percents": []float64{25, 50, 75, 95, 99},
 					},
 				},
 			},

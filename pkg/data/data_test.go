@@ -36,8 +36,8 @@ func TestNewDataNode(t *testing.T) {
 
 func TestNewDataNode_NilLogger(t *testing.T) {
 	cfg := &config.DataNodeConfig{
-		NodeID:   "node-1",
-		DataDir:  t.TempDir(),
+		NodeID:    "node-1",
+		DataDir:   t.TempDir(),
 		MaxShards: 10,
 	}
 

@@ -411,17 +411,17 @@ func computeExtendedStatsAggData(hits []*diagon.Hit, field string) *pb.Aggregati
 		maxVal = 0
 	}
 	return &pb.AggregationResult{
-		Type:                       "extended_stats",
-		Count:                      count,
-		Min:                        minVal,
-		Max:                        maxVal,
-		Avg:                        avg,
-		Sum:                        sum,
-		SumOfSquares:               sumOfSquares,
-		Variance:                   variance,
-		StdDeviation:               stdDev,
-		StdDeviationBoundsUpper:    avg + 2.0*stdDev,
-		StdDeviationBoundsLower:    avg - 2.0*stdDev,
+		Type:                    "extended_stats",
+		Count:                   count,
+		Min:                     minVal,
+		Max:                     maxVal,
+		Avg:                     avg,
+		Sum:                     sum,
+		SumOfSquares:            sumOfSquares,
+		Variance:                variance,
+		StdDeviation:            stdDev,
+		StdDeviationBoundsUpper: avg + 2.0*stdDev,
+		StdDeviationBoundsLower: avg - 2.0*stdDev,
 	}
 }
 

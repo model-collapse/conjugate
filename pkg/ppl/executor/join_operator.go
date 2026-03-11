@@ -33,10 +33,10 @@ type joinOperator struct {
 	opened         bool
 	closed         bool
 	buildCompleted bool
-	currentLeft    *Row           // Current left row being processed
-	rightMatches   []*Row         // Matching right rows for current left
-	matchIndex     int            // Current index in rightMatches
-	leftDone       bool           // True when left side exhausted
+	currentLeft    *Row   // Current left row being processed
+	rightMatches   []*Row // Matching right rows for current left
+	matchIndex     int    // Current index in rightMatches
+	leftDone       bool   // True when left side exhausted
 }
 
 // NewJoinOperator creates a new join operator

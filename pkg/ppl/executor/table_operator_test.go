@@ -20,18 +20,18 @@ func TestTableOperator_BasicSelection(t *testing.T) {
 	// Create test data with multiple fields
 	rows := []*Row{
 		NewRow(map[string]interface{}{
-			"host":     "server1",
-			"status":   200,
-			"latency":  50,
-			"method":   "GET",
-			"path":     "/api/users",
+			"host":    "server1",
+			"status":  200,
+			"latency": 50,
+			"method":  "GET",
+			"path":    "/api/users",
 		}),
 		NewRow(map[string]interface{}{
-			"host":     "server2",
-			"status":   404,
-			"latency":  30,
-			"method":   "POST",
-			"path":     "/api/orders",
+			"host":    "server2",
+			"status":  404,
+			"latency": 30,
+			"method":  "POST",
+			"path":    "/api/orders",
 		}),
 	}
 

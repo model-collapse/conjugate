@@ -14,19 +14,19 @@ import (
 type SubqueryType int
 
 const (
-	SubqueryTypeIN SubqueryType = iota     // IN subquery: field IN [search ...]
+	SubqueryTypeIN     SubqueryType = iota // IN subquery: field IN [search ...]
 	SubqueryTypeEXISTS                     // EXISTS subquery: EXISTS [search ...]
 	SubqueryTypeScalar                     // Scalar subquery: field > [search ... | stats avg(x)]
 )
 
 // SubqueryExecutor executes a subquery and returns results
 type SubqueryExecutor struct {
-	subsearch      Operator          // The subsearch pipeline
-	logger         *zap.Logger
-	maxRows        int               // Maximum rows to materialize (default: 10000)
-	resultCache    []*Row            // Cached results
-	executed       bool              // Whether subquery has been executed
-	subqueryType   SubqueryType
+	subsearch    Operator // The subsearch pipeline
+	logger       *zap.Logger
+	maxRows      int    // Maximum rows to materialize (default: 10000)
+	resultCache  []*Row // Cached results
+	executed     bool   // Whether subquery has been executed
+	subqueryType SubqueryType
 }
 
 // NewSubqueryExecutor creates a new subquery executor

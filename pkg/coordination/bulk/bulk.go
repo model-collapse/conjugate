@@ -36,13 +36,13 @@ type BulkRequest struct {
 
 // BulkItemResult represents the result of a single bulk operation
 type BulkItemResult struct {
-	Index   string                 `json:"_index"`
-	ID      string                 `json:"_id"`
-	Version int64                  `json:"_version,omitempty"`
-	Result  string                 `json:"result,omitempty"`
-	Status  int                    `json:"status"`
-	Error   *BulkItemError         `json:"error,omitempty"`
-	Shards  *BulkItemShards        `json:"_shards,omitempty"`
+	Index   string          `json:"_index"`
+	ID      string          `json:"_id"`
+	Version int64           `json:"_version,omitempty"`
+	Result  string          `json:"result,omitempty"`
+	Status  int             `json:"status"`
+	Error   *BulkItemError  `json:"error,omitempty"`
+	Shards  *BulkItemShards `json:"_shards,omitempty"`
 }
 
 // BulkItemError represents an error for a bulk operation
@@ -60,8 +60,8 @@ type BulkItemShards struct {
 
 // BulkResponse represents the response to a bulk request
 type BulkResponse struct {
-	Took   int64                         `json:"took"`
-	Errors bool                          `json:"errors"`
+	Took   int64                        `json:"took"`
+	Errors bool                         `json:"errors"`
 	Items  []map[string]*BulkItemResult `json:"items"`
 }
 

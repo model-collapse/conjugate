@@ -38,16 +38,16 @@ type CoordinationConfig struct {
 
 // DataNodeConfig holds configuration for data nodes (Diagon)
 type DataNodeConfig struct {
-	NodeID       string
-	BindAddr     string
-	GRPCPort     int
-	DataDir      string
-	MasterAddr   string
-	StorageTier  string // hot, warm, cold, frozen
-	MaxShards    int
-	LogLevel     string
-	MetricsPort  int
-	SIMDEnabled  bool
+	NodeID      string
+	BindAddr    string
+	GRPCPort    int
+	DataDir     string
+	MasterAddr  string
+	StorageTier string // hot, warm, cold, frozen
+	MaxShards   int
+	LogLevel    string
+	MetricsPort int
+	SIMDEnabled bool
 }
 
 // LoadMasterConfig loads master node configuration from file

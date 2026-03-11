@@ -7,11 +7,11 @@ import (
 	"net"
 	"time"
 
-	"github.com/google/uuid"
-	pb "github.com/conjugate/conjugate/pkg/common/proto"
 	"github.com/conjugate/conjugate/pkg/common/config"
+	pb "github.com/conjugate/conjugate/pkg/common/proto"
 	"github.com/conjugate/conjugate/pkg/master/allocation"
 	"github.com/conjugate/conjugate/pkg/master/raft"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )

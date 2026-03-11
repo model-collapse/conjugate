@@ -415,16 +415,16 @@ type AggregationResult struct {
 	Buckets []*AggregationBucket
 
 	// Stats/Extended Stats fields
-	Count                     int64
-	Min                       float64
-	Max                       float64
-	Avg                       float64
-	Sum                       float64
-	SumOfSquares              float64
-	Variance                  float64
-	StdDeviation              float64
-	StdDeviationBoundsUpper   float64
-	StdDeviationBoundsLower   float64
+	Count                   int64
+	Min                     float64
+	Max                     float64
+	Avg                     float64
+	Sum                     float64
+	SumOfSquares            float64
+	Variance                float64
+	StdDeviation            float64
+	StdDeviationBoundsUpper float64
+	StdDeviationBoundsLower float64
 
 	// Percentiles field
 	Values map[string]float64

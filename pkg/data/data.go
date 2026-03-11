@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/conjugate/conjugate/pkg/common/proto"
 	"github.com/conjugate/conjugate/pkg/common/config"
+	pb "github.com/conjugate/conjugate/pkg/common/proto"
 	"github.com/conjugate/conjugate/pkg/data/diagon"
 	"github.com/conjugate/conjugate/pkg/wasm"
 	"go.uber.org/zap"
@@ -263,9 +263,9 @@ func (d *DataNode) collectStats() *NodeStats {
 	defer d.mu.RUnlock()
 
 	stats := &NodeStats{
-		NodeID:       d.cfg.NodeID,
-		ActiveShards: d.shards.Count(),
-		DocsCount:    0,
+		NodeID:         d.cfg.NodeID,
+		ActiveShards:   d.shards.Count(),
+		DocsCount:      0,
 		StoreSizeBytes: 0,
 	}
 
@@ -330,10 +330,10 @@ type NodeStats struct {
 
 // SearchResult represents search results from a shard
 type SearchResult struct {
-	Took       int64
-	TotalHits  int64
-	MaxScore   float64
-	Hits       []*Hit
+	Took      int64
+	TotalHits int64
+	MaxScore  float64
+	Hits      []*Hit
 }
 
 // Hit represents a search hit

@@ -879,15 +879,15 @@ func (s *DataService) GetNodeStats(ctx context.Context, req *pb.GetNodeStatsRequ
 
 	// TODO: Get actual CPU, memory, disk usage
 	nodeStats := &pb.DataNodeStats{
-		NodeId:              s.node.cfg.NodeID,
-		TotalShards:         int32(len(shards)),
-		TotalDocs:           totalDocs,
-		TotalSizeBytes:      totalSize,
-		CpuUsagePercent:     0.0,  // TODO: Implement
-		MemoryUsagePercent:  0.0,  // TODO: Implement
-		DiskUsagePercent:    0.0,  // TODO: Implement
-		UptimeSeconds:       0,    // TODO: Track uptime
-		Shards:              shardStats,
+		NodeId:             s.node.cfg.NodeID,
+		TotalShards:        int32(len(shards)),
+		TotalDocs:          totalDocs,
+		TotalSizeBytes:     totalSize,
+		CpuUsagePercent:    0.0, // TODO: Implement
+		MemoryUsagePercent: 0.0, // TODO: Implement
+		DiskUsagePercent:   0.0, // TODO: Implement
+		UptimeSeconds:      0,   // TODO: Track uptime
+		Shards:             shardStats,
 	}
 
 	return nodeStats, nil
@@ -951,11 +951,11 @@ func convertAggregations(aggs map[string]diagon.AggregationResult) map[string]*p
 			pbAgg.Sum = agg.Sum
 
 			if agg.Type == "extended_stats" {
-// 				pbAgg.SumOfSquares = agg.SumOfSquares
-// 				pbAgg.Variance = agg.Variance
-// 				pbAgg.StdDeviation = agg.StdDeviation
-// 				pbAgg.StdDeviationBoundsUpper = agg.StdDeviationBoundsUpper
-// 				pbAgg.StdDeviationBoundsLower = agg.StdDeviationBoundsLower
+				// 				pbAgg.SumOfSquares = agg.SumOfSquares
+				// 				pbAgg.Variance = agg.Variance
+				// 				pbAgg.StdDeviation = agg.StdDeviation
+				// 				pbAgg.StdDeviationBoundsUpper = agg.StdDeviationBoundsUpper
+				// 				pbAgg.StdDeviationBoundsLower = agg.StdDeviationBoundsLower
 			}
 
 		case "avg":
@@ -1771,4 +1771,3 @@ func getNestedField(m map[string]interface{}, parts []string) interface{} {
 	}
 	return current
 }
-

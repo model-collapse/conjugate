@@ -306,7 +306,7 @@ func TestUDFIntegration_ErrorHandling(t *testing.T) {
 			"language":      "wasm",
 			"function_name": "udf_main",
 			"wasm_base64":   "not-valid-base64-wasm-data!!!",
-			"returns": []map[string]interface{}{{"type": "bool"}},
+			"returns":       []map[string]interface{}{{"type": "bool"}},
 		}
 
 		body, _ := json.Marshal(uploadReq)
@@ -354,7 +354,7 @@ func TestUDFIntegration_Concurrency(t *testing.T) {
 		"language":      "wasm",
 		"function_name": "udf_main",
 		"wasm_base64":   wasmBinary,
-		"returns": []map[string]interface{}{{"type": "bool"}},
+		"returns":       []map[string]interface{}{{"type": "bool"}},
 	}
 
 	body, _ := json.Marshal(uploadReq)
@@ -460,7 +460,7 @@ func TestUDFIntegration_MultipleVersions(t *testing.T) {
 			"language":      "wasm",
 			"function_name": "udf_main",
 			"wasm_base64":   wasmBinary,
-			"returns": []map[string]interface{}{{"type": "bool"}},
+			"returns":       []map[string]interface{}{{"type": "bool"}},
 		}
 
 		body, _ := json.Marshal(uploadReq)
@@ -483,7 +483,7 @@ func TestUDFIntegration_MultipleVersions(t *testing.T) {
 			"language":      "wasm",
 			"function_name": "udf_main",
 			"wasm_base64":   wasmBinary,
-			"returns": []map[string]interface{}{{"type": "bool"}},
+			"returns":       []map[string]interface{}{{"type": "bool"}},
 		}
 
 		body, _ := json.Marshal(uploadReq)
@@ -594,7 +594,7 @@ func TestUDFIntegration_Performance(t *testing.T) {
 		"language":      "wasm",
 		"function_name": "udf_main",
 		"wasm_base64":   wasmBinary,
-		"returns": []map[string]interface{}{{"type": "bool"}},
+		"returns":       []map[string]interface{}{{"type": "bool"}},
 	}
 
 	body, _ := json.Marshal(uploadReq)
@@ -677,20 +677,20 @@ func createMinimalWASMModule() string {
 		0x01, 0x7F, // Number of results: 1, type: i32
 
 		// Function section (1 function using type 0)
-		0x03,       // Section ID: Function
-		0x02,       // Section size: 2 bytes
-		0x01,       // Number of functions: 1
-		0x00,       // Function 0 uses type 0
+		0x03, // Section ID: Function
+		0x02, // Section size: 2 bytes
+		0x01, // Number of functions: 1
+		0x00, // Function 0 uses type 0
 
 		// Export section (export function 0 as "udf_main")
-		0x07,                               // Section ID: Export
-		0x0C,                               // Section size: 12 bytes
-		0x01,                               // Number of exports: 1
-		0x08,                               // Name length: 8
-		0x75, 0x64, 0x66, 0x5F,             // "udf_"
-		0x6D, 0x61, 0x69, 0x6E,             // "main"
-		0x00,                               // Export kind: function
-		0x00,                               // Function index: 0
+		0x07,                   // Section ID: Export
+		0x0C,                   // Section size: 12 bytes
+		0x01,                   // Number of exports: 1
+		0x08,                   // Name length: 8
+		0x75, 0x64, 0x66, 0x5F, // "udf_"
+		0x6D, 0x61, 0x69, 0x6E, // "main"
+		0x00, // Export kind: function
+		0x00, // Function index: 0
 
 		// Code section (function body)
 		0x0A,       // Section ID: Code
@@ -699,7 +699,7 @@ func createMinimalWASMModule() string {
 		0x04,       // Body size: 4 bytes
 		0x00,       // Local declaration count: 0
 		0x41, 0x01, // i32.const 1
-		0x0B,       // end
+		0x0B, // end
 	}
 
 	return base64.StdEncoding.EncodeToString(wasmBytes)

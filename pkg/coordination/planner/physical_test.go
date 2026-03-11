@@ -173,8 +173,8 @@ func TestPlannerScan(t *testing.T) {
 	planner := NewPlanner(cm)
 
 	logical := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0, 1, 2},
+		IndexName:     "products",
+		Shards:        []int32{0, 1, 2},
 		EstimatedRows: 10000,
 	}
 
@@ -199,8 +199,8 @@ func TestPlannerFilter(t *testing.T) {
 			Value: "electronics",
 		},
 		Child: &LogicalScan{
-			IndexName:   "products",
-			Shards:      []int32{0},
+			IndexName:     "products",
+			Shards:        []int32{0},
 			EstimatedRows: 10000,
 		},
 		EstimatedRows: 2000,
@@ -223,8 +223,8 @@ func TestPlannerProject(t *testing.T) {
 	logical := &LogicalProject{
 		Fields: []string{"name", "price"},
 		Child: &LogicalScan{
-			IndexName:   "products",
-			Shards:      []int32{0},
+			IndexName:     "products",
+			Shards:        []int32{0},
 			EstimatedRows: 10000,
 		},
 	}
@@ -250,8 +250,8 @@ func TestPlannerAggregateSmallDataset(t *testing.T) {
 			{Name: "count", Type: AggTypeCount, Field: "_id"},
 		},
 		Child: &LogicalScan{
-			IndexName:   "products",
-			Shards:      []int32{0},
+			IndexName:     "products",
+			Shards:        []int32{0},
 			EstimatedRows: 500, // Small dataset
 		},
 	}
@@ -275,8 +275,8 @@ func TestPlannerAggregateLargeDataset(t *testing.T) {
 			{Name: "count", Type: AggTypeCount, Field: "_id"},
 		},
 		Child: &LogicalScan{
-			IndexName:   "products",
-			Shards:      []int32{0, 1, 2},
+			IndexName:     "products",
+			Shards:        []int32{0, 1, 2},
 			EstimatedRows: 100000, // Large dataset
 		},
 	}
@@ -299,8 +299,8 @@ func TestPlannerSort(t *testing.T) {
 			{Field: "price", Descending: true},
 		},
 		Child: &LogicalScan{
-			IndexName:   "products",
-			Shards:      []int32{0},
+			IndexName:     "products",
+			Shards:        []int32{0},
 			EstimatedRows: 10000,
 		},
 	}
@@ -322,8 +322,8 @@ func TestPlannerLimit(t *testing.T) {
 		Offset: 0,
 		Limit:  10,
 		Child: &LogicalScan{
-			IndexName:   "products",
-			Shards:      []int32{0},
+			IndexName:     "products",
+			Shards:        []int32{0},
 			EstimatedRows: 10000,
 		},
 	}
@@ -358,8 +358,8 @@ func TestPlannerComplexPlan(t *testing.T) {
 						Value: "electronics",
 					},
 					Child: &LogicalScan{
-						IndexName:   "products",
-						Shards:      []int32{0, 1, 2},
+						IndexName:     "products",
+						Shards:        []int32{0, 1, 2},
 						EstimatedRows: 100000,
 					},
 					EstimatedRows: 20000,
@@ -402,8 +402,8 @@ func TestExecutionResult(t *testing.T) {
 			{"id": "1", "name": "Product 1", "price": 100.0},
 			{"id": "2", "name": "Product 2", "price": 200.0},
 		},
-		TotalHits:  2,
-		MaxScore:   1.5,
+		TotalHits: 2,
+		MaxScore:  1.5,
 		Aggregations: map[string]*AggregationResult{
 			"avg_price": {
 				Type:  AggTypeAvg,

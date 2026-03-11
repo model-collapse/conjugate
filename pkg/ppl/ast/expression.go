@@ -26,7 +26,7 @@ func (b *BinaryExpression) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitBinaryExpression(b)
 }
 
-func (b *BinaryExpression) Type() NodeType { return NodeTypeBinaryExpression }
+func (b *BinaryExpression) Type() NodeType  { return NodeTypeBinaryExpression }
 func (b *BinaryExpression) expressionNode() {}
 func (b *BinaryExpression) String() string {
 	return fmt.Sprintf("(%s %s %s)", b.Left.String(), b.Operator, b.Right.String())
@@ -43,7 +43,7 @@ func (u *UnaryExpression) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitUnaryExpression(u)
 }
 
-func (u *UnaryExpression) Type() NodeType { return NodeTypeUnaryExpression }
+func (u *UnaryExpression) Type() NodeType  { return NodeTypeUnaryExpression }
 func (u *UnaryExpression) expressionNode() {}
 func (u *UnaryExpression) String() string {
 	return fmt.Sprintf("(%s %s)", u.Operator, u.Operand.String())
@@ -61,7 +61,7 @@ func (f *FunctionCall) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitFunctionCall(f)
 }
 
-func (f *FunctionCall) Type() NodeType { return NodeTypeFunctionCall }
+func (f *FunctionCall) Type() NodeType  { return NodeTypeFunctionCall }
 func (f *FunctionCall) expressionNode() {}
 func (f *FunctionCall) String() string {
 	args := make([]string, len(f.Arguments))
@@ -85,7 +85,7 @@ func (f *FieldReference) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitFieldReference(f)
 }
 
-func (f *FieldReference) Type() NodeType { return NodeTypeFieldReference }
+func (f *FieldReference) Type() NodeType  { return NodeTypeFieldReference }
 func (f *FieldReference) expressionNode() {}
 func (f *FieldReference) String() string  { return f.Name }
 
@@ -111,7 +111,7 @@ func (l *Literal) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitLiteral(l)
 }
 
-func (l *Literal) Type() NodeType { return NodeTypeLiteral }
+func (l *Literal) Type() NodeType  { return NodeTypeLiteral }
 func (l *Literal) expressionNode() {}
 func (l *Literal) String() string {
 	if l.Value == nil {
@@ -135,7 +135,7 @@ func (l *ListLiteral) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitListLiteral(l)
 }
 
-func (l *ListLiteral) Type() NodeType { return NodeTypeListLiteral }
+func (l *ListLiteral) Type() NodeType  { return NodeTypeListLiteral }
 func (l *ListLiteral) expressionNode() {}
 func (l *ListLiteral) String() string {
 	vals := make([]string, len(l.Values))
@@ -172,7 +172,7 @@ func (c *CaseExpression) Accept(visitor Visitor) (interface{}, error) {
 	return visitor.VisitCaseExpression(c)
 }
 
-func (c *CaseExpression) Type() NodeType { return NodeTypeCaseExpression }
+func (c *CaseExpression) Type() NodeType  { return NodeTypeCaseExpression }
 func (c *CaseExpression) expressionNode() {}
 func (c *CaseExpression) String() string {
 	parts := []string{"CASE"}

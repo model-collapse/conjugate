@@ -23,22 +23,22 @@ const (
 
 // RaftNode wraps the Hashicorp Raft library and provides cluster consensus
 type RaftNode struct {
-	raft         *raft.Raft
-	fsm          *FSM
-	transport    *raft.NetworkTransport
-	logger       *zap.Logger
-	config       *Config
-	shutdownCh   chan struct{}
+	raft       *raft.Raft
+	fsm        *FSM
+	transport  *raft.NetworkTransport
+	logger     *zap.Logger
+	config     *Config
+	shutdownCh chan struct{}
 }
 
 // Config holds Raft configuration
 type Config struct {
-	NodeID       string
-	RaftAddr     string
-	DataDir      string
-	Bootstrap    bool
-	Peers        []string
-	Logger       *zap.Logger
+	NodeID    string
+	RaftAddr  string
+	DataDir   string
+	Bootstrap bool
+	Peers     []string
+	Logger    *zap.Logger
 }
 
 // NewRaftNode creates a new Raft node

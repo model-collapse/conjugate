@@ -26,9 +26,9 @@ type addtotalsOperator struct {
 
 	// State
 	ctx         context.Context
-	buffer      []*Row         // Buffer to hold all rows (only used when col=true)
-	index       int            // Current index for emitting rows
-	totalsAdded bool           // True when totals row has been calculated and added
+	buffer      []*Row // Buffer to hold all rows (only used when col=true)
+	index       int    // Current index for emitting rows
+	totalsAdded bool   // True when totals row has been calculated and added
 	opened      bool
 	closed      bool
 }
@@ -37,11 +37,11 @@ type addtotalsOperator struct {
 func NewAddtotalsOperator(
 	input Operator,
 	fields []ast.Expression,
-	row bool,            // Add row totals (default: true)
-	col bool,            // Add column totals (default: false)
-	labelField string,   // Field for summary row label
-	label string,        // Text for summary row label (default: "Total")
-	fieldName string,    // Field name for row totals
+	row bool, // Add row totals (default: true)
+	col bool, // Add column totals (default: false)
+	labelField string, // Field for summary row label
+	label string, // Text for summary row label (default: "Total")
+	fieldName string, // Field name for row totals
 	logger *zap.Logger,
 ) *addtotalsOperator {
 	if label == "" {

@@ -16,15 +16,15 @@ import (
 
 // MasterClient manages communication with the master node
 type MasterClient struct {
-	nodeID         string
-	masterAddr     string
-	logger         *zap.Logger
-	conn           *grpc.ClientConn
-	client         pb.MasterServiceClient
-	mu             sync.RWMutex
-	connected      bool
-	heartbeatStop  chan struct{}
-	heartbeatDone  chan struct{}
+	nodeID        string
+	masterAddr    string
+	logger        *zap.Logger
+	conn          *grpc.ClientConn
+	client        pb.MasterServiceClient
+	mu            sync.RWMutex
+	connected     bool
+	heartbeatStop chan struct{}
+	heartbeatDone chan struct{}
 }
 
 // NewMasterClient creates a new master client

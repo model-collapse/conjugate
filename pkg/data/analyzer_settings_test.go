@@ -168,9 +168,9 @@ func TestAnalyzeField(t *testing.T) {
 		value     string
 		minTokens int
 	}{
-		{"title", "Hello World", 2},           // simple analyzer
-		{"description", "The quick fox", 2},   // standard analyzer (removes "the")
-		{"tags", "one-tag", 1},                // standard analyzer (default)
+		{"title", "Hello World", 2},         // simple analyzer
+		{"description", "The quick fox", 2}, // standard analyzer (removes "the")
+		{"tags", "one-tag", 1},              // standard analyzer (default)
 	}
 
 	for _, tt := range tests {
@@ -201,10 +201,10 @@ func TestAnalyzeFieldWithDifferentAnalyzers(t *testing.T) {
 		value    string
 		contains string
 	}{
-		{"simple", "Hello World", "hello"},        // lowercased
-		{"whitespace", "Hello World", "Hello"},    // not lowercased
+		{"simple", "Hello World", "hello"},            // lowercased
+		{"whitespace", "Hello World", "Hello"},        // not lowercased
 		{"keyword", "one two three", "one two three"}, // not split
-		{"english", "café", "cafe"},               // ASCII folded
+		{"english", "café", "cafe"},                   // ASCII folded
 	}
 
 	for _, tt := range tests {

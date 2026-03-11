@@ -22,13 +22,13 @@ type aggregationOperator struct {
 	algorithm    physical.AggregationAlgorithm
 	logger       *zap.Logger
 
-	ctx          context.Context
-	results      []*Row
-	aggResults   map[string]*AggregationValue
-	index        int
-	stats        *IteratorStats
-	opened       bool
-	closed       bool
+	ctx        context.Context
+	results    []*Row
+	aggResults map[string]*AggregationValue
+	index      int
+	stats      *IteratorStats
+	opened     bool
+	closed     bool
 }
 
 // NewAggregationOperator creates a new aggregation operator

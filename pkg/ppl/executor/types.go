@@ -246,14 +246,14 @@ type AggregationValue struct {
 	Type string
 
 	// Metric aggregation values
-	Value      float64
-	Count      int64
-	Min        float64
-	Max        float64
-	Avg        float64
-	Sum        float64
-	Variance   float64
-	StdDev     float64
+	Value    float64
+	Count    int64
+	Min      float64
+	Max      float64
+	Avg      float64
+	Sum      float64
+	Variance float64
+	StdDev   float64
 
 	// Bucket aggregation values
 	Buckets []*BucketValue

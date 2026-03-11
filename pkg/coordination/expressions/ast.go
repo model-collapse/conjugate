@@ -8,13 +8,13 @@ import (
 type ExpressionType int
 
 const (
-	ExprTypeUnknown ExpressionType = iota
-	ExprTypeConst                  // Constant value
-	ExprTypeField                  // Document field access
-	ExprTypeBinaryOp               // Binary operation (+, -, *, /, ==, <, etc.)
-	ExprTypeUnaryOp                // Unary operation (-, !)
-	ExprTypeTernary                // Ternary operation (condition ? true : false)
-	ExprTypeFunction               // Function call (abs, sqrt, min, max, etc.)
+	ExprTypeUnknown  ExpressionType = iota
+	ExprTypeConst                   // Constant value
+	ExprTypeField                   // Document field access
+	ExprTypeBinaryOp                // Binary operation (+, -, *, /, ==, <, etc.)
+	ExprTypeUnaryOp                 // Unary operation (-, !)
+	ExprTypeTernary                 // Ternary operation (condition ? true : false)
+	ExprTypeFunction                // Function call (abs, sqrt, min, max, etc.)
 )
 
 // DataType defines the data type of a value
@@ -125,7 +125,7 @@ type UnaryOperator int
 
 const (
 	OpNegate UnaryOperator = iota // - (negation)
-	OpNot                          // ! (logical not)
+	OpNot                         // ! (logical not)
 )
 
 func (op UnaryOperator) String() string {
@@ -204,8 +204,8 @@ type Expression interface {
 
 // ConstExpression represents a constant value
 type ConstExpression struct {
-	Value    interface{} // bool, int64, float64, or string
-	DataTyp  DataType
+	Value   interface{} // bool, int64, float64, or string
+	DataTyp DataType
 }
 
 func (e *ConstExpression) Type() ExpressionType { return ExprTypeConst }

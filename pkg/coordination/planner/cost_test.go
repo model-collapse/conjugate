@@ -41,9 +41,9 @@ func TestEstimateScanCost(t *testing.T) {
 	cm := NewDefaultCostModel()
 
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0, 1, 2},
-		Filter:      nil,
+		IndexName:     "products",
+		Shards:        []int32{0, 1, 2},
+		Filter:        nil,
 		EstimatedRows: 10000,
 	}
 
@@ -66,9 +66,9 @@ func TestEstimateScanCostWithFilter(t *testing.T) {
 
 	// Compare scans with same cardinality, one with filter
 	scanNoFilter := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
-		Filter:      nil,
+		IndexName:     "products",
+		Shards:        []int32{0},
+		Filter:        nil,
 		EstimatedRows: 10000,
 	}
 
@@ -94,8 +94,8 @@ func TestEstimateFilterCost(t *testing.T) {
 	cm := NewDefaultCostModel()
 
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -107,7 +107,7 @@ func TestEstimateFilterCost(t *testing.T) {
 			Field: "category",
 			Value: "electronics",
 		},
-		Child:       scan,
+		Child:         scan,
 		EstimatedRows: 2000,
 	}
 
@@ -170,8 +170,8 @@ func TestEstimateProjectCost(t *testing.T) {
 	cm := NewDefaultCostModel()
 
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -199,8 +199,8 @@ func TestEstimateAggregateCost(t *testing.T) {
 	cm := NewDefaultCostModel()
 
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 100000,
 	}
 
@@ -232,8 +232,8 @@ func TestEstimateSortCost(t *testing.T) {
 	cm := NewDefaultCostModel()
 
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -264,8 +264,8 @@ func TestEstimateLimitCost(t *testing.T) {
 	cm := NewDefaultCostModel()
 
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 

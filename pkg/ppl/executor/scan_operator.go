@@ -19,12 +19,12 @@ type scanOperator struct {
 	logger     *zap.Logger
 
 	// Runtime state
-	ctx     context.Context
-	rows    []*Row
-	index_  int // Index into rows
-	stats   *IteratorStats
-	opened  bool
-	closed  bool
+	ctx    context.Context
+	rows   []*Row
+	index_ int // Index into rows
+	stats  *IteratorStats
+	opened bool
+	closed bool
 }
 
 // NewScanOperator creates a new scan operator

@@ -55,8 +55,8 @@ type ModuleMetadata struct {
 
 // FunctionInfo describes an exported function
 type FunctionInfo struct {
-	Name       string
-	ParamTypes []api.ValueType
+	Name        string
+	ParamTypes  []api.ValueType
 	ResultTypes []api.ValueType
 }
 

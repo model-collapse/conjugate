@@ -10,35 +10,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/conjugate/conjugate/pkg/common/config"
 	"github.com/conjugate/conjugate/pkg/coordination"
 	"github.com/conjugate/conjugate/pkg/data"
 	"github.com/conjugate/conjugate/pkg/master"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
 // TestCluster represents a multi-node test cluster
 type TestCluster struct {
-	t              testing.TB
-	logger         *zap.Logger
-	baseDir        string
-	masterNodes    []*MasterNodeWrapper
-	coordNodes     []*CoordNodeWrapper
-	dataNodes      []*DataNodeWrapper
-	shutdownCh     chan struct{}
-	wg             sync.WaitGroup
-	startTime      time.Time
-	mu             sync.RWMutex
+	t           testing.TB
+	logger      *zap.Logger
+	baseDir     string
+	masterNodes []*MasterNodeWrapper
+	coordNodes  []*CoordNodeWrapper
+	dataNodes   []*DataNodeWrapper
+	shutdownCh  chan struct{}
+	wg          sync.WaitGroup
+	startTime   time.Time
+	mu          sync.RWMutex
 }
 
 // MasterNodeWrapper wraps a master node with test utilities
 type MasterNodeWrapper struct {
-	Node   *master.MasterNode
-	Config *config.MasterConfig
+	Node    *master.MasterNode
+	Config  *config.MasterConfig
 	DataDir string
 	Started bool
-	mu     sync.RWMutex
+	mu      sync.RWMutex
 }
 
 // CoordNodeWrapper wraps a coordination node with test utilities

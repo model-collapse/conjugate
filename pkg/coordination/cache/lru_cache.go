@@ -18,18 +18,18 @@ type Entry struct {
 
 // LRUCache is a thread-safe LRU cache with TTL support
 type LRUCache struct {
-	mu          sync.RWMutex
-	capacity    int           // Maximum number of entries
-	maxSize     int64         // Maximum total size in bytes (0 = unlimited)
-	ttl         time.Duration // Time-to-live for entries
-	entries     map[string]*list.Element
+	mu           sync.RWMutex
+	capacity     int           // Maximum number of entries
+	maxSize      int64         // Maximum total size in bytes (0 = unlimited)
+	ttl          time.Duration // Time-to-live for entries
+	entries      map[string]*list.Element
 	evictionList *list.List
-	currentSize int64
+	currentSize  int64
 
 	// Statistics
-	hits      int64
-	misses    int64
-	evictions int64
+	hits        int64
+	misses      int64
+	evictions   int64
 	expirations int64
 }
 

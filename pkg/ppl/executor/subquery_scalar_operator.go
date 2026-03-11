@@ -23,23 +23,23 @@ type SubqueryScalarValue struct {
 // Note: This operator doesn't filter rows itself; it executes the subquery and
 // provides the scalar value for use in comparison expressions.
 type scalarSubqueryOperator struct {
-	input          Operator
-	logger         *zap.Logger
-	ctx            context.Context
-	stats          *IteratorStats
-	opened         bool
-	closed         bool
-	subqueryExec   *SubqueryExecutor
-	scalarValue    SubqueryScalarValue
-	comparisonOp   string            // Comparison operator: "=", "<", ">", "<=", ">=", "!="
-	fieldName      string            // Field to compare
+	input        Operator
+	logger       *zap.Logger
+	ctx          context.Context
+	stats        *IteratorStats
+	opened       bool
+	closed       bool
+	subqueryExec *SubqueryExecutor
+	scalarValue  SubqueryScalarValue
+	comparisonOp string // Comparison operator: "=", "<", ">", "<=", ">=", "!="
+	fieldName    string // Field to compare
 }
 
 // SubqueryScalarConfig holds configuration for scalar subquery operator
 type SubqueryScalarConfig struct {
-	FieldName    string          // Field to compare
-	Subsearch    Operator        // Subsearch pipeline
-	ComparisonOp string          // Comparison operator
+	FieldName    string   // Field to compare
+	Subsearch    Operator // Subsearch pipeline
+	ComparisonOp string   // Comparison operator
 }
 
 // NewScalarSubqueryOperator creates a new scalar subquery operator

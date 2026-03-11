@@ -15,9 +15,10 @@ import (
 // Grok uses named regular expression patterns to extract structured fields
 //
 // Examples:
-//   grok "%{COMMONAPACHELOG}"
-//   grok "%{IP:client_ip} - - \[%{HTTPDATE:timestamp}\]"
-//   grok pattern="%{LOGLEVEL:level} %{GREEDYDATA:message}"
+//
+//	grok "%{COMMONAPACHELOG}"
+//	grok "%{IP:client_ip} - - \[%{HTTPDATE:timestamp}\]"
+//	grok pattern="%{LOGLEVEL:level} %{GREEDYDATA:message}"
 type grokOperator struct {
 	input          Operator
 	logger         *zap.Logger

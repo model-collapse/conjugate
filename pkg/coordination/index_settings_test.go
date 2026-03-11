@@ -8,8 +8,8 @@ package coordination
 import (
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/conjugate/conjugate/pkg/coordination/pipeline"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"

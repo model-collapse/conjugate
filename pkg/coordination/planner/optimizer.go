@@ -30,9 +30,9 @@ func (rs *RuleSet) AddRule(rule Rule) {
 
 // Optimizer applies optimization rules to a logical plan
 type Optimizer struct {
-	RuleSet    *RuleSet
-	MaxPasses  int  // Maximum optimization passes
-	CostBased  bool // Enable cost-based optimization
+	RuleSet   *RuleSet
+	MaxPasses int  // Maximum optimization passes
+	CostBased bool // Enable cost-based optimization
 }
 
 // NewOptimizer creates a new optimizer with default rules
@@ -120,8 +120,8 @@ type BaseRule struct {
 	priority int
 }
 
-func (r *BaseRule) Name() string     { return r.name }
-func (r *BaseRule) Priority() int    { return r.priority }
+func (r *BaseRule) Name() string  { return r.name }
+func (r *BaseRule) Priority() int { return r.priority }
 
 // Common optimization rules
 
@@ -361,8 +361,8 @@ func (r *PredicatePushdownForAggregationsRule) Apply(plan LogicalPlan) (LogicalP
 
 	// Push filter below aggregation to reduce rows before aggregating
 	newFilter := &LogicalFilter{
-		Condition: filter.Condition,
-		Child:     agg.Child,
+		Condition:     filter.Condition,
+		Child:         agg.Child,
 		EstimatedRows: filter.EstimatedRows,
 	}
 

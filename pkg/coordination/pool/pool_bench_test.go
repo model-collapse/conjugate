@@ -118,8 +118,8 @@ func BenchmarkHighThroughput(b *testing.B) {
 		hits := pool.GetHitSlice()
 		for j := 0; j < 10; j++ {
 			*hits = append(*hits, &pb.SearchHit{
-				Id:     "doc",
-				Score:  1.0,
+				Id:         "doc",
+				Score:      1.0,
 				SourceJson: nil, // Benchmark doesn't need actual source data
 			})
 		}

@@ -343,9 +343,9 @@ func TestContextPool(t *testing.T) {
 
 func TestNewDocumentContextFromMap(t *testing.T) {
 	data := map[string]interface{}{
-		"title":    "Test Document",
-		"price":    99.99,
-		"quantity": 10,
+		"title":     "Test Document",
+		"price":     99.99,
+		"quantity":  10,
 		"available": true,
 	}
 

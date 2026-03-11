@@ -12,11 +12,11 @@ import (
 
 // ModuleInstance represents an instantiated WASM module
 type ModuleInstance struct {
-	name     string
-	module   api.Module
-	runtime  *Runtime
-	logger   *zap.Logger
-	mu       sync.RWMutex
+	name    string
+	module  api.Module
+	runtime *Runtime
+	logger  *zap.Logger
+	mu      sync.RWMutex
 }
 
 // NewModuleInstance creates a new module instance
@@ -200,12 +200,12 @@ func (mi *ModuleInstance) GetName() string {
 
 // ModulePool manages a pool of reusable module instances
 type ModulePool struct {
-	runtime  *Runtime
-	module   string
-	pool     chan *ModuleInstance
-	size     int
-	logger   *zap.Logger
-	mu       sync.RWMutex
+	runtime *Runtime
+	module  string
+	pool    chan *ModuleInstance
+	size    int
+	logger  *zap.Logger
+	mu      sync.RWMutex
 }
 
 // NewModulePool creates a pool of module instances for reuse

@@ -15,9 +15,9 @@ type CommandType string
 
 const (
 	// Index commands
-	CommandCreateIndex  CommandType = "create_index"
-	CommandDeleteIndex  CommandType = "delete_index"
-	CommandUpdateIndex  CommandType = "update_index"
+	CommandCreateIndex CommandType = "create_index"
+	CommandDeleteIndex CommandType = "delete_index"
+	CommandUpdateIndex CommandType = "update_index"
 
 	// Node commands
 	CommandRegisterNode   CommandType = "register_node"
@@ -39,36 +39,36 @@ type Command struct {
 
 // ClusterState represents the entire cluster state
 type ClusterState struct {
-	Version      int64                   `json:"version"`
-	ClusterUUID  string                  `json:"cluster_uuid"`
-	Indices      map[string]*IndexMeta   `json:"indices"`       // index_name -> metadata
-	Nodes        map[string]*NodeMeta    `json:"nodes"`         // node_id -> metadata
+	Version      int64                    `json:"version"`
+	ClusterUUID  string                   `json:"cluster_uuid"`
+	Indices      map[string]*IndexMeta    `json:"indices"`       // index_name -> metadata
+	Nodes        map[string]*NodeMeta     `json:"nodes"`         // node_id -> metadata
 	ShardRouting map[string]*ShardRouting `json:"shard_routing"` // "index:shard_id" -> routing
 }
 
 // IndexMeta stores index metadata
 type IndexMeta struct {
-	Name             string            `json:"name"`
-	UUID             string            `json:"uuid"`
-	Version          int64             `json:"version"`
-	NumShards        int32             `json:"num_shards"`
-	NumReplicas      int32             `json:"num_replicas"`
-	Settings         map[string]string `json:"settings"`
-	State            string            `json:"state"` // open, closed, deleting
-	CreatedAt        int64             `json:"created_at"`
+	Name        string            `json:"name"`
+	UUID        string            `json:"uuid"`
+	Version     int64             `json:"version"`
+	NumShards   int32             `json:"num_shards"`
+	NumReplicas int32             `json:"num_replicas"`
+	Settings    map[string]string `json:"settings"`
+	State       string            `json:"state"` // open, closed, deleting
+	CreatedAt   int64             `json:"created_at"`
 }
 
 // NodeMeta stores node metadata
 type NodeMeta struct {
-	NodeID      string            `json:"node_id"`
-	NodeType    string            `json:"node_type"` // master, coordination, data
-	BindAddr    string            `json:"bind_addr"`
-	GRPCPort    int32             `json:"grpc_port"`
-	StorageTier string            `json:"storage_tier"`
-	MaxShards   int32             `json:"max_shards"`
-	Status      string            `json:"status"` // healthy, degraded, offline
-	JoinedAt    int64             `json:"joined_at"`
-	LastSeen    int64             `json:"last_seen"`
+	NodeID      string `json:"node_id"`
+	NodeType    string `json:"node_type"` // master, coordination, data
+	BindAddr    string `json:"bind_addr"`
+	GRPCPort    int32  `json:"grpc_port"`
+	StorageTier string `json:"storage_tier"`
+	MaxShards   int32  `json:"max_shards"`
+	Status      string `json:"status"` // healthy, degraded, offline
+	JoinedAt    int64  `json:"joined_at"`
+	LastSeen    int64  `json:"last_seen"`
 }
 
 // ShardRouting stores shard allocation information

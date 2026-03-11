@@ -36,12 +36,12 @@ func NewMemoryPool(sizes []int) *MemoryPool {
 func DefaultMemoryPool() *MemoryPool {
 	// Common sizes: 1KB, 4KB, 16KB, 64KB, 256KB, 1MB
 	return NewMemoryPool([]int{
-		1024,          // 1KB
-		4096,          // 4KB
-		16384,         // 16KB
-		65536,         // 64KB
-		262144,        // 256KB
-		1048576,       // 1MB
+		1024,    // 1KB
+		4096,    // 4KB
+		16384,   // 16KB
+		65536,   // 64KB
+		262144,  // 256KB
+		1048576, // 1MB
 	})
 }
 
@@ -86,8 +86,8 @@ func (mp *MemoryPool) Put(buf []byte) {
 
 // Stats returns statistics about pool usage
 type MemoryPoolStats struct {
-	PoolSizes []int          // Configured pool sizes
-	PoolStats map[int]int    // Current pool item counts (best effort)
+	PoolSizes []int       // Configured pool sizes
+	PoolStats map[int]int // Current pool item counts (best effort)
 }
 
 // GetStats returns memory pool statistics

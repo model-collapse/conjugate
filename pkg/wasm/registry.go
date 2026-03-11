@@ -11,20 +11,20 @@ import (
 
 // UDFRegistry manages User-Defined Functions (UDFs) compiled as WASM modules
 type UDFRegistry struct {
-	runtime      *Runtime
-	hostFuncs    *HostFunctions
-	logger       *zap.Logger
+	runtime   *Runtime
+	hostFuncs *HostFunctions
+	logger    *zap.Logger
 
 	// UDF storage
-	udfs         map[string]*RegisteredUDF // name@version → UDF
-	pools        map[string]*ModulePool    // name@version → pool
-	stats        map[string]*UDFStats      // name@version → stats
+	udfs  map[string]*RegisteredUDF // name@version → UDF
+	pools map[string]*ModulePool    // name@version → pool
+	stats map[string]*UDFStats      // name@version → stats
 
 	// Configuration
 	defaultPoolSize int
 	enableStats     bool
 
-	mu               sync.RWMutex
+	mu sync.RWMutex
 }
 
 // RegisteredUDF represents a registered WASM UDF

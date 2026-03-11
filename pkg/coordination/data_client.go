@@ -15,12 +15,12 @@ import (
 
 // DataNodeClient manages communication with a data node
 type DataNodeClient struct {
-	nodeID   string
-	address  string
-	logger   *zap.Logger
-	conn     *grpc.ClientConn
-	client   pb.DataServiceClient
-	mu       sync.RWMutex
+	nodeID    string
+	address   string
+	logger    *zap.Logger
+	conn      *grpc.ClientConn
+	client    pb.DataServiceClient
+	mu        sync.RWMutex
 	connected bool
 }
 

@@ -11,15 +11,15 @@ import (
 
 // limitOperator limits the number of rows returned
 type limitOperator struct {
-	input Operator
-	count int
+	input  Operator
+	count  int
 	logger *zap.Logger
 
-	ctx     context.Context
+	ctx      context.Context
 	returned int
-	stats   *IteratorStats
-	opened  bool
-	closed  bool
+	stats    *IteratorStats
+	opened   bool
+	closed   bool
 }
 
 // NewLimitOperator creates a new limit operator

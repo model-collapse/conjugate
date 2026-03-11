@@ -127,8 +127,8 @@ func TestAnalyzer_StatsCommand_Valid(t *testing.T) {
 			&ast.StatsCommand{
 				Aggregations: []*ast.Aggregation{
 					{
-						Func: &ast.FunctionCall{Name: "count"},
-						Alias:      "total",
+						Func:  &ast.FunctionCall{Name: "count"},
+						Alias: "total",
 					},
 				},
 				GroupBy: []ast.Expression{
@@ -307,8 +307,8 @@ func TestAnalyzer_ComplexPipeline(t *testing.T) {
 			&ast.StatsCommand{
 				Aggregations: []*ast.Aggregation{
 					{
-						Func: &ast.FunctionCall{Name: "count"},
-						Alias:      "total",
+						Func:  &ast.FunctionCall{Name: "count"},
+						Alias: "total",
 					},
 				},
 				GroupBy: []ast.Expression{

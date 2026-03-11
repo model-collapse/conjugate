@@ -9,9 +9,9 @@ import (
 
 func TestLogicalScan(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0, 1, 2},
-		Filter:      nil,
+		IndexName:     "products",
+		Shards:        []int32{0, 1, 2},
+		Filter:        nil,
 		EstimatedRows: 10000,
 	}
 
@@ -23,8 +23,8 @@ func TestLogicalScan(t *testing.T) {
 
 func TestLogicalFilter(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -34,7 +34,7 @@ func TestLogicalFilter(t *testing.T) {
 			Field: "category",
 			Value: "electronics",
 		},
-		Child:       scan,
+		Child:         scan,
 		EstimatedRows: 2000,
 	}
 
@@ -46,8 +46,8 @@ func TestLogicalFilter(t *testing.T) {
 
 func TestLogicalProject(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -71,8 +71,8 @@ func TestLogicalProject(t *testing.T) {
 
 func TestLogicalAggregate(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -110,8 +110,8 @@ func TestLogicalAggregate(t *testing.T) {
 
 func TestLogicalSort(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -132,8 +132,8 @@ func TestLogicalSort(t *testing.T) {
 
 func TestLogicalLimit(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
@@ -151,8 +151,8 @@ func TestLogicalLimit(t *testing.T) {
 
 func TestLogicalLimitWithLargeOffset(t *testing.T) {
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 100,
 	}
 
@@ -168,14 +168,14 @@ func TestLogicalLimitWithLargeOffset(t *testing.T) {
 
 func TestSetChild(t *testing.T) {
 	scan1 := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0},
+		IndexName:     "products",
+		Shards:        []int32{0},
 		EstimatedRows: 10000,
 	}
 
 	scan2 := &LogicalScan{
-		IndexName:   "users",
-		Shards:      []int32{0},
+		IndexName:     "users",
+		Shards:        []int32{0},
 		EstimatedRows: 5000,
 	}
 
@@ -185,7 +185,7 @@ func TestSetChild(t *testing.T) {
 			Field: "status",
 			Value: "active",
 		},
-		Child:       scan1,
+		Child:         scan1,
 		EstimatedRows: 2000,
 	}
 
@@ -204,8 +204,8 @@ func TestComplexPlanTree(t *testing.T) {
 	// Limit -> Sort -> Project -> Filter -> Scan
 
 	scan := &LogicalScan{
-		IndexName:   "products",
-		Shards:      []int32{0, 1, 2},
+		IndexName:     "products",
+		Shards:        []int32{0, 1, 2},
 		EstimatedRows: 100000,
 	}
 
@@ -215,7 +215,7 @@ func TestComplexPlanTree(t *testing.T) {
 			Field: "category",
 			Value: "electronics",
 		},
-		Child:       scan,
+		Child:         scan,
 		EstimatedRows: 20000,
 	}
 
