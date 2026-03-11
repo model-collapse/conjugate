@@ -1,5 +1,6 @@
-# ANTLR4 generated files
-generated/
+# ANTLR4 metadata files (generated .go files ARE tracked)
+generated/*.interp
+generated/*.tokens
 *.interp
 *.tokens
 

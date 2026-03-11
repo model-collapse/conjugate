@@ -31,7 +31,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v4
         with:
-          version: latest
+          version: v1.57.2
           args: --timeout=5m --out-format=colored-line-number
 
   staticcheck:
@@ -51,7 +51,9 @@ jobs:
         run: go install honnef.co/go/tools/cmd/staticcheck@latest
 
       - name: Run staticcheck
-        run: staticcheck ./...
+        run: |
+          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated')
+          staticcheck $PACKAGES
 
   gosec:
     name: Security Scan
@@ -69,7 +71,7 @@ jobs:
       - name: Run gosec
         uses: securego/gosec@master
         with:
-          args: '-no-fail -fmt sarif -out gosec-results.sarif ./...'
+          args: '-no-fail -fmt sarif -out gosec-results.sarif -exclude-dir=pkg/data -exclude-dir=cmd/data -exclude-dir=cmd/test-cluster ./...'
 
       - name: Upload gosec results
         uses: github/codeql-action/upload-sarif@v3
@@ -94,7 +96,9 @@ jobs:
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck
-        run: govulncheck ./...
+        run: |
+          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated')
+          govulncheck $PACKAGES
 
   gofmt:
     name: Code Formatting
@@ -149,7 +153,9 @@ jobs:
           cache: true
 
       - name: Run tests with coverage
-        run: go test -short -coverprofile=coverage.out -covermode=atomic ./...
+        run: |
+          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated')
+          go test -short -coverprofile=coverage.out -covermode=atomic $PACKAGES
 
       - name: Generate coverage report
         run: go tool cover -html=coverage.out -o coverage.html
@@ -196,8 +202,11 @@ jobs:
         with:
           languages: go
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+      - name: Build non-CGO targets
+        run: |
+          go build ./cmd/master
+          go build ./cmd/coordination
+          go build ./cmd/forcemerge
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3

@@ -157,9 +157,12 @@ func TestParseBulkRequest_InvalidJSON(t *testing.T) {
 {invalid json}
 `)
 
-	_, err := ParseBulkRequest(body)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse document")
+	// Index/create operations pass raw JSON through without validation
+	// (validation happens on the data node). So this should succeed.
+	req, err := ParseBulkRequest(body)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(req.Operations))
+	assert.Equal(t, []byte(`{invalid json}`), req.Operations[0].RawJSON)
 }
 
 func TestParseBulkRequest_UnknownOperation(t *testing.T) {

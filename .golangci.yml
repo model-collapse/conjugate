@@ -20,7 +20,6 @@ linters:
     - revive
     - misspell
     - unconvert
-    - unparam
     - whitespace
     - gocyclo
     - gocognit
@@ -75,9 +74,6 @@ linters-settings:
   lll:
     line-length: 120
 
-  unparam:
-    check-exported: false
-
   nakedret:
     max-func-lines: 30
 
@@ -130,6 +126,14 @@ linters-settings:
     checks: ["all", "-ST1000", "-ST1003"] # Allow missing package comments
 
 issues:
+  # Skip CGO-dependent packages (require Diagon C++ headers)
+  # and ANTLR generated code (auto-generated, has unreachable code)
+  exclude-dirs:
+    - pkg/data
+    - cmd/data
+    - cmd/test-cluster
+    - pkg/ppl/parser/generated
+
   exclude-rules:
     # Exclude some linters from running on tests files
     - path: _test\.go

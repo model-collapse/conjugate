@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/conjugate/conjugate/pkg/common/config"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -21,7 +22,8 @@ func TestUDFRoutesRegistration(t *testing.T) {
 		MasterAddr: "127.0.0.1:8000",
 	}
 
-	node, err := NewCoordinationNode(cfg, logger)
+	// Use a dedicated prometheus registry to avoid duplicate registration panics
+	node, err := NewCoordinationNodeWithRegistry(cfg, logger, prometheus.NewRegistry())
 	require.NoError(t, err)
 	defer node.Stop(context.Background())
 

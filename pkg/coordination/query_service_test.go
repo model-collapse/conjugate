@@ -201,7 +201,7 @@ func TestExecuteSearchWithAggregations(t *testing.T) {
 	avgAgg, ok := result.Aggregations["avg_price"]
 	require.True(t, ok)
 	assert.Equal(t, "avg", avgAgg.Type)
-	assert.Equal(t, 45.5, avgAgg.Value)
+	assert.Equal(t, 45.5, avgAgg.Avg)
 }
 
 func TestExecuteSearchInvalidQuery(t *testing.T) {
