@@ -27,7 +27,6 @@ linters:
     - bodyclose
     - nilerr
     - nolintlint
-    - exportloopref
     - goconst
     - godot
     - gosec
