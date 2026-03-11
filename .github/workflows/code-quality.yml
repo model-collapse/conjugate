@@ -32,7 +32,8 @@ jobs:
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest
-          args: --timeout=5m --out-format=colored-line-number
+          # Exclude CGO-dependent packages (pkg/data, cmd/data) that require Diagon C++ headers
+          args: --timeout=5m --out-format=colored-line-number ./pkg/coordination/... ./pkg/master/... ./pkg/ppl/... ./pkg/wasm/... ./pkg/common/... ./cmd/master/... ./cmd/coordination/... ./cmd/forcemerge/... ./examples/...
 
   staticcheck:
     name: Static Analysis
@@ -52,7 +53,7 @@ jobs:
 
       - name: Run staticcheck
         run: |
-          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated')
+          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated|test/integration')
           staticcheck $PACKAGES
 
   gosec:
@@ -97,7 +98,7 @@ jobs:
 
       - name: Run govulncheck
         run: |
-          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated')
+          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated|test/integration')
           govulncheck $PACKAGES
 
   gofmt:
@@ -154,7 +155,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated')
+          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated|test/integration')
           go test -short -coverprofile=coverage.out -covermode=atomic $PACKAGES
 
       - name: Generate coverage report

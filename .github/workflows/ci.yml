@@ -28,7 +28,8 @@ jobs:
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest
-          args: --timeout=5m
+          # Exclude CGO-dependent packages (pkg/data, cmd/data) that require Diagon C++ headers
+          args: --timeout=5m ./pkg/coordination/... ./pkg/master/... ./pkg/ppl/... ./pkg/wasm/... ./pkg/common/... ./cmd/master/... ./cmd/coordination/... ./cmd/forcemerge/... ./examples/...
 
   unit-tests:
     name: Unit Tests
@@ -51,9 +52,9 @@ jobs:
 
       - name: Run unit tests
         run: |
-          # Exclude CGO-dependent packages (pkg/data, cmd/data, cmd/test-cluster)
+          # Exclude CGO-dependent packages (pkg/data, cmd/data, cmd/test-cluster, test/integration)
           # and ANTLR generated code (go vet complains about unreachable code)
-          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated')
+          PACKAGES=$(go list ./... | grep -v -E 'pkg/data|cmd/data|cmd/test-cluster|cmd/forcemerge|ppl/parser/generated|test/integration')
           go test -short -race -coverprofile=coverage.txt -covermode=atomic $PACKAGES
 
       - name: Upload coverage to Codecov
@@ -83,13 +84,10 @@ jobs:
 
       - name: Run integration tests
         run: |
-          # Integration tests require a running cluster with Diagon - skip CGO packages
-          PACKAGES=$(go list ./test/integration/... 2>/dev/null | grep -v -E 'pkg/data|cmd/data' || true)
-          if [ -n "$PACKAGES" ]; then
-            go test -v -race -timeout 20m $PACKAGES
-          else
-            echo "No non-CGO integration tests found, skipping"
-          fi
+          # Integration tests require Diagon C++ library (imports pkg/data)
+          # and a running cluster. Skip in standard CI.
+          echo "Integration tests require Diagon C++ library - skipping in CI"
+          echo "Run locally with: go test -v -race -timeout 20m ./test/integration/..."
 
       - name: Upload test logs
         if: failure()
