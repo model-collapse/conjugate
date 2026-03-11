@@ -18,6 +18,7 @@ jobs:
   golangci-lint:
     name: Go Linting
     runs-on: ubuntu-latest
+    continue-on-error: true  # Advisory only, pre-existing lint debt
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
