@@ -1479,13 +1479,10 @@ func (m *SearchHit) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x22
 	}
-	if m.Source != nil {
-		size, err := (*structpb.Struct)(m.Source).MarshalToSizedBufferVT(dAtA[:i])
-		if err != nil {
-			return 0, err
-		}
-		i -= size
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
+	if len(m.SourceJson) > 0 {
+		i -= len(m.SourceJson)
+		copy(dAtA[i:], m.SourceJson)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.SourceJson)))
 		i--
 		dAtA[i] = 0x1a
 	}
@@ -2766,8 +2763,8 @@ func (m *SearchHit) SizeVT() (n int) {
 	if m.Score != 0 {
 		n += 9
 	}
-	if m.Source != nil {
-		l = (*structpb.Struct)(m.Source).SizeVT()
+	l = len(m.SourceJson)
+	if l > 0 {
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	if len(m.Sort) > 0 {
@@ -6590,9 +6587,9 @@ func (m *SearchHit) UnmarshalVT(dAtA []byte) error {
 			m.Score = float64(math.Float64frombits(v))
 		case 3:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Source", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field SourceJson", wireType)
 			}
-			var msglen int
+			var byteLen int
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -6602,26 +6599,24 @@ func (m *SearchHit) UnmarshalVT(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				msglen |= int(b&0x7F) << shift
+				byteLen |= int(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			if msglen < 0 {
+			if byteLen < 0 {
 				return protohelpers.ErrInvalidLength
 			}
-			postIndex := iNdEx + msglen
+			postIndex := iNdEx + byteLen
 			if postIndex < 0 {
 				return protohelpers.ErrInvalidLength
 			}
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Source == nil {
-				m.Source = &structpb1.Struct{}
-			}
-			if err := (*structpb.Struct)(m.Source).UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
-				return err
+			m.SourceJson = append(m.SourceJson[:0], dAtA[iNdEx:postIndex]...)
+			if m.SourceJson == nil {
+				m.SourceJson = []byte{}
 			}
 			iNdEx = postIndex
 		case 4:

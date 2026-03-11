@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"encoding/json"
 	"math"
 	"sort"
 	"time"
@@ -39,8 +40,8 @@ func (qe *QueryExecutor) aggregateSearchResults(responses []*pb.SearchResponse, 
 		if resp.Hits != nil {
 			for _, hit := range resp.Hits.Hits {
 				var sourceMap map[string]interface{}
-				if hit.Source != nil {
-					sourceMap = hit.Source.AsMap()
+				if len(hit.SourceJson) > 0 {
+					json.Unmarshal(hit.SourceJson, &sourceMap)
 				}
 				allHits = append(allHits, &SearchHit{
 					ID:     hit.Id,
@@ -169,22 +170,45 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 		return qe.mergeFiltersAggregation(aggs)
 	}
 
+	// Single-shard fast path: skip map+sort overhead when there's only one response
+	if len(aggs) == 1 {
+		single := aggs[0]
+		buckets := make([]*AggregationBucket, len(single.Buckets))
+		for i, b := range single.Buckets {
+			bucket := &AggregationBucket{
+				Key:        b.Key,
+				NumericKey: b.NumericKey,
+				DocCount:   b.DocCount,
+			}
+			if len(b.SubAggregations) > 0 {
+				subAggsByName := make(map[string][]*pb.AggregationResult, len(b.SubAggregations))
+				for subName, subAgg := range b.SubAggregations {
+					subAggsByName[subName] = []*pb.AggregationResult{subAgg}
+				}
+				bucket.SubAggs = qe.mergeSubAggregations(subAggsByName)
+			}
+			buckets[i] = bucket
+		}
+		return &AggregationResult{Type: aggType, Buckets: buckets}
+	}
+
 	// Sum bucket counts across all shards, collecting sub-aggs per bucket
 	type bucketData struct {
-		count   int64
-		subAggs map[string][]*pb.AggregationResult // sub-aggs grouped by name across shards
+		count     int64
+		stringKey string                                // preserved for numeric-keyed date_histogram
+		subAggs   map[string][]*pb.AggregationResult    // sub-aggs grouped by name across shards
 	}
-	bucketMap := make(map[string]*bucketData)         // for string keys (terms, date_histogram)
-	numericBucketMap := make(map[float64]*bucketData)  // for numeric keys (histogram)
+	bucketMap := make(map[string]*bucketData)         // for string keys (terms)
+	numericBucketMap := make(map[float64]*bucketData)  // for numeric keys (histogram, date_histogram)
 
-	isNumeric := aggType == "histogram"
+	isNumeric := aggType == "histogram" || aggType == "date_histogram"
 
 	for _, agg := range aggs {
 		for _, bucket := range agg.Buckets {
 			if isNumeric {
 				bd, ok := numericBucketMap[bucket.NumericKey]
 				if !ok {
-					bd = &bucketData{subAggs: make(map[string][]*pb.AggregationResult)}
+					bd = &bucketData{stringKey: bucket.Key, subAggs: make(map[string][]*pb.AggregationResult)}
 					numericBucketMap[bucket.NumericKey] = bd
 				}
 				bd.count += bucket.DocCount
@@ -209,9 +233,10 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 	var buckets []*AggregationBucket
 
 	if isNumeric {
-		// Numeric buckets (histogram)
+		// Numeric buckets (histogram, date_histogram)
 		for key, bd := range numericBucketMap {
 			bucket := &AggregationBucket{
+				Key:        bd.stringKey,
 				NumericKey: key,
 				DocCount:   bd.count,
 			}
@@ -225,7 +250,7 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 			return buckets[i].NumericKey < buckets[j].NumericKey
 		})
 	} else {
-		// String buckets (terms, date_histogram)
+		// String buckets (terms, etc.)
 		for key, bd := range bucketMap {
 			bucket := &AggregationBucket{
 				Key:      key,

@@ -64,8 +64,9 @@ func sanitizeUTF8Map(m map[string]interface{}) {
 // TTL matches the reader refresh interval (30s) so cache is naturally
 // invalidated when new documents arrive.
 type searchCacheEntry struct {
-	result  *diagon.SearchResult
-	created time.Time
+	result    *diagon.SearchResult
+	protoHits []*pb.SearchHit // pre-built proto hits; avoids re-serialization on cache hit
+	created   time.Time
 }
 
 const searchCacheTTL = 30 * time.Second
@@ -507,6 +508,8 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 	searchStart := time.Now()
 	var result *diagon.SearchResult
 	var aggregations map[string]*pb.AggregationResult
+	var cachedProtoHits []*pb.SearchHit // pre-built hits from search cache (nil on miss)
+	var pendingCacheKey string          // set on cache miss; triggers store after proto conversion
 
 	// Check aggregation cache for agg-only queries (size=0)
 	// Use req.Query (original bytes including aggs) so different agg definitions
@@ -624,6 +627,7 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 				entry := cached.(*searchCacheEntry)
 				if time.Since(entry.created) < searchCacheTTL {
 					result = entry.result
+					cachedProtoHits = entry.protoHits
 				}
 			}
 
@@ -665,11 +669,8 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 					}
 				}
 
-				// Store in search result cache
-				s.searchCache.Store(sCacheKey, &searchCacheEntry{
-					result:  result,
-					created: time.Now(),
-				})
+				// Defer cache store until after proto conversion so we include protoHits
+				pendingCacheKey = sCacheKey
 			}
 		}
 	}
@@ -688,19 +689,29 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 	convertStart := time.Now()
 	var hits []*pb.SearchHit
 	if len(aggsMap) == 0 {
-		hits = make([]*pb.SearchHit, 0, len(result.Hits))
-		for _, hit := range result.Hits {
-			sanitizeUTF8Map(hit.Source)
-			docStruct, err := structpb.NewStruct(hit.Source)
-			if err != nil {
-				s.logger.Error("Failed to convert document", zap.Error(err))
-				continue
+		if cachedProtoHits != nil {
+			hits = cachedProtoHits
+		} else {
+			hits = make([]*pb.SearchHit, 0, len(result.Hits))
+			for _, hit := range result.Hits {
+				sourceJSON := hit.SourceJSON
+				if sourceJSON == nil && hit.Source != nil {
+					sourceJSON, _ = json.Marshal(hit.Source)
+				}
+				hits = append(hits, &pb.SearchHit{
+					Id:         hit.ID,
+					Score:      hit.Score,
+					SourceJson: sourceJSON,
+				})
 			}
-			hits = append(hits, &pb.SearchHit{
-				Id:     hit.ID,
-				Score:  hit.Score,
-				Source: docStruct,
-			})
+			// Store in search cache with pre-built proto hits
+			if pendingCacheKey != "" {
+				s.searchCache.Store(pendingCacheKey, &searchCacheEntry{
+					result:    result,
+					protoHits: hits,
+					created:   time.Now(),
+				})
+			}
 		}
 	}
 	convertTime := time.Since(convertStart)

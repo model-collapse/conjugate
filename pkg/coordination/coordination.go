@@ -2,6 +2,9 @@ package coordination
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +29,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// searchResponseCacheEntry stores a pre-serialized JSON response
+type searchResponseCacheEntry struct {
+	jsonBytes []byte
+	cachedAt  time.Time
+}
+
+const searchResponseCacheTTL = 30 * time.Second
+
 // CoordinationNode represents a coordination node in the CONJUGATE cluster
 type CoordinationNode struct {
 	cfg           *config.CoordinationConfig
@@ -49,6 +60,9 @@ type CoordinationNode struct {
 	// Pipeline Management
 	pipelineRegistry *pipeline.Registry
 	pipelineExecutor *pipeline.Executor
+
+	// Response caching
+	searchResponseCache sync.Map // key: string (cache key), value: *searchResponseCacheEntry
 }
 
 // NewCoordinationNode creates a new coordination node with the default Prometheus registry
@@ -75,17 +89,20 @@ func NewCoordinationNodeWithRegistry(cfg *config.CoordinationConfig, logger *zap
 	// Create master client
 	masterClient := NewMasterClient(cfg.MasterAddr, logger)
 
+	// Wrap with caching layer for query path to avoid duplicate gRPC round-trips
+	cachedMasterClient := newCachingMasterClient(masterClient, 5*time.Second)
+
 	// Create data clients map
 	dataClients := make(map[string]*DataNodeClient)
 
 	// Create query executor
-	queryExecutor := executor.NewQueryExecutor(masterClient, logger)
+	queryExecutor := executor.NewQueryExecutor(cachedMasterClient, logger)
 
 	// Create query planner
-	queryPlanner := planner.NewQueryPlanner(masterClient, logger)
+	queryPlanner := planner.NewQueryPlanner(cachedMasterClient, logger)
 
 	// Create query service with complete planner pipeline
-	queryService := NewQueryService(queryExecutor, masterClient, logger)
+	queryService := NewQueryService(queryExecutor, cachedMasterClient, logger)
 
 	// Create document router
 	// We'll convert dataClients to the interface type needed by router
@@ -1380,6 +1397,29 @@ func (c *CoordinationNode) executeBulkOperation(ctx context.Context, op *bulk.Bu
 	return result
 }
 
+// searchResponseCacheKey generates a cache key for search responses
+func searchResponseCacheKey(indexName string, body []byte) string {
+	h := sha256.New()
+	h.Write([]byte(indexName))
+	h.Write(body)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// shouldExcludeSource checks if the request has "_source": false
+func shouldExcludeSource(body []byte) bool {
+	// Quick scan for "_source" in the body
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return false
+	}
+	if sourceVal, ok := raw["_source"]; ok {
+		// Check if it's literally "false"
+		trimmed := strings.TrimSpace(string(sourceVal))
+		return trimmed == "false"
+	}
+	return false
+}
+
 func (c *CoordinationNode) handleSearch(ctx *gin.Context) {
 	startTime := time.Now()
 	indexName := ctx.Param("index")
@@ -1399,6 +1439,17 @@ func (c *CoordinationNode) handleSearch(ctx *gin.Context) {
 			},
 		})
 		return
+	}
+
+	// Check pre-serialized response cache
+	cacheKey := searchResponseCacheKey(indexName, body)
+	if entry, ok := c.searchResponseCache.Load(cacheKey); ok {
+		cached := entry.(*searchResponseCacheEntry)
+		if time.Since(cached.cachedAt) < searchResponseCacheTTL {
+			ctx.Data(http.StatusOK, "application/json; charset=utf-8", cached.jsonBytes)
+			return
+		}
+		c.searchResponseCache.Delete(cacheKey)
 	}
 
 	// Execute search using the complete planner pipeline
@@ -1427,8 +1478,11 @@ func (c *CoordinationNode) handleSearch(ctx *gin.Context) {
 		return
 	}
 
+	// Check if _source should be excluded
+	excludeSource := shouldExcludeSource(body)
+
 	// Convert result to OpenSearch/Elasticsearch format
-	response := c.convertSearchResultToResponse(result)
+	response := c.convertSearchResultToResponse(result, excludeSource)
 
 	// Record metrics
 	c.metrics.RecordQuery(
@@ -1440,19 +1494,32 @@ func (c *CoordinationNode) handleSearch(ctx *gin.Context) {
 		result.Shards.Total,
 	)
 
-	ctx.JSON(http.StatusOK, response)
+	// Serialize and cache the response
+	jsonBytes, err := json.Marshal(response)
+	if err == nil {
+		c.searchResponseCache.Store(cacheKey, &searchResponseCacheEntry{
+			jsonBytes: jsonBytes,
+			cachedAt:  time.Now(),
+		})
+		ctx.Data(http.StatusOK, "application/json; charset=utf-8", jsonBytes)
+	} else {
+		ctx.JSON(http.StatusOK, response)
+	}
 }
 
 // convertSearchResultToResponse converts SearchResult to OpenSearch/Elasticsearch response format
-func (c *CoordinationNode) convertSearchResultToResponse(result *SearchResult) gin.H {
+func (c *CoordinationNode) convertSearchResultToResponse(result *SearchResult, excludeSource bool) gin.H {
 	// Convert hits
 	hits := make([]gin.H, 0, len(result.Hits))
 	for _, hit := range result.Hits {
-		hits = append(hits, gin.H{
-			"_id":     hit.ID,
-			"_score":  hit.Score,
-			"_source": hit.Source,
-		})
+		hitData := gin.H{
+			"_id":    hit.ID,
+			"_score": hit.Score,
+		}
+		if !excludeSource {
+			hitData["_source"] = hit.Source
+		}
+		hits = append(hits, hitData)
 	}
 
 	response := gin.H{

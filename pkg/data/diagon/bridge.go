@@ -1983,6 +1983,7 @@ func (s *Shard) matchAllShortcut(totalStart time.Time, reopenTime, parseTime tim
 		}
 
 		var doc map[string]interface{}
+		var sourceJSONBytes []byte
 		if len(fieldsOnly) > 0 {
 			doc = make(map[string]interface{}, len(fieldsOnly))
 			for fi, cFN := range cFieldNames {
@@ -2005,6 +2006,8 @@ func (s *Shard) matchAllShortcut(totalStart time.Time, reopenTime, parseTime tim
 					if sourceBuf[j] == 0 {
 						if j > 0 {
 							json.Unmarshal(sourceBuf[:j], &doc)
+							sourceJSONBytes = make([]byte, j)
+							copy(sourceJSONBytes, sourceBuf[:j])
 						}
 						break
 					}
@@ -2019,9 +2022,10 @@ func (s *Shard) matchAllShortcut(totalStart time.Time, reopenTime, parseTime tim
 		}
 
 		hits = append(hits, &Hit{
-			ID:     docIDString,
-			Score:  1.0, // match_all: constant score
-			Source: doc,
+			ID:         docIDString,
+			Score:      1.0, // match_all: constant score
+			Source:     doc,
+			SourceJSON: sourceJSONBytes,
 		})
 	}
 	s.mu.RUnlock()
@@ -2218,6 +2222,7 @@ func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults
 		}
 
 		var doc map[string]interface{}
+		var sourceJSONBytes []byte
 		if len(fieldsOnly) > 0 {
 			// Fields-only mode: read individual stored fields (skip _source JSON parsing)
 			doc = make(map[string]interface{}, len(fieldsOnly))
@@ -2242,6 +2247,8 @@ func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults
 					if sourceBuf[j] == 0 {
 						if j > 0 {
 							json.Unmarshal(sourceBuf[:j], &doc)
+							sourceJSONBytes = make([]byte, j)
+							copy(sourceJSONBytes, sourceBuf[:j])
 						}
 						break
 					}
@@ -2256,9 +2263,10 @@ func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults
 		}
 
 		hits = append(hits, &Hit{
-			ID:     docIDString,
-			Score:  score,
-			Source: doc,
+			ID:         docIDString,
+			Score:      score,
+			Source:     doc,
+			SourceJSON: sourceJSONBytes,
 		})
 	}
 	s.mu.RUnlock()
@@ -3338,9 +3346,10 @@ type SearchResult struct {
 
 // Hit represents a search hit
 type Hit struct {
-	ID     string                 `json:"_id"`
-	Score  float64                `json:"_score"`
-	Source map[string]interface{} `json:"_source"`
+	ID         string                 `json:"_id"`
+	Score      float64                `json:"_score"`
+	Source     map[string]interface{} `json:"_source"`
+	SourceJSON []byte                 `json:"-"` // Raw JSON bytes for proto passthrough
 }
 
 // AggregationResult represents an aggregation result

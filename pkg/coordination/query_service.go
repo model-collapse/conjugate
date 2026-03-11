@@ -2,8 +2,11 @@ package coordination
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	pb "github.com/conjugate/conjugate/pkg/common/proto"
@@ -16,6 +19,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 )
+
+// aggResponseCacheEntry stores a cached aggregation response
+type aggResponseCacheEntry struct {
+	result   *SearchResult
+	cachedAt time.Time
+}
+
+const aggResponseCacheTTL = 30 * time.Second
 
 // Prometheus metrics for query service
 var (
@@ -78,6 +89,7 @@ type QueryService struct {
 	queryCache       *cache.QueryCache
 	pipelineRegistry *pipeline.Registry
 	pipelineExecutor *pipeline.Executor
+	aggResponseCache sync.Map // key: string (sha256 of index+query), value: *aggResponseCacheEntry
 }
 
 // queryExecutorInterface defines the methods needed from query executor
@@ -418,6 +430,14 @@ func (qs *QueryService) ExecuteSearch(ctx context.Context, indexName string, req
 	return result, nil
 }
 
+// aggResponseCacheKey generates a cache key for aggregation responses
+func aggResponseCacheKey(indexName string, rawQuery []byte) string {
+	h := sha256.New()
+	h.Write([]byte(indexName))
+	h.Write(rawQuery)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // executeAggFastPath bypasses the planner and sends raw query JSON directly to
 // data nodes for aggregation queries (size=0). The executor fans out to all shards,
 // and each data node's native aggregation path computes results using C++ hash maps.
@@ -425,6 +445,31 @@ func (qs *QueryService) executeAggFastPath(ctx context.Context, indexName string
 	qs.logger.Debug("Agg fast path: bypassing planner for size=0 agg query",
 		zap.String("index", indexName))
 
+	// Check coordination-level agg response cache
+	cacheKey := aggResponseCacheKey(indexName, rawQuery)
+	if entry, ok := qs.aggResponseCache.Load(cacheKey); ok {
+		cached := entry.(*aggResponseCacheEntry)
+		if time.Since(cached.cachedAt) < aggResponseCacheTTL {
+			totalTime := time.Since(startTime)
+			// Return cached result with updated took time
+			result := &SearchResult{
+				TookMillis:   totalTime.Milliseconds(),
+				TotalHits:    cached.result.TotalHits,
+				MaxScore:     cached.result.MaxScore,
+				Hits:         cached.result.Hits,
+				Aggregations: cached.result.Aggregations,
+				Shards:       cached.result.Shards,
+			}
+			qs.logger.Debug("Agg fast path: cache hit",
+				zap.String("index", indexName),
+				zap.Duration("total_time", totalTime))
+			return result, nil
+		}
+		// Expired - delete
+		qs.aggResponseCache.Delete(cacheKey)
+	}
+
+	// Cache miss - execute via gRPC
 	// Use the existing executor fan-out — sends raw query bytes to all data nodes
 	// with size=0. Data node detects embedded aggs and uses native C++ fast path.
 	execResult, err := qs.queryExecutor.ExecuteSearch(ctx, indexName, rawQuery, nil, 0, 0, nil)
@@ -446,6 +491,12 @@ func (qs *QueryService) executeAggFastPath(ctx context.Context, indexName string
 	for name, agg := range execResult.Aggregations {
 		result.Aggregations[name] = convertExecutorAggregation(agg)
 	}
+
+	// Store in coordination-level cache
+	qs.aggResponseCache.Store(cacheKey, &aggResponseCacheEntry{
+		result:   result,
+		cachedAt: time.Now(),
+	})
 
 	qs.logger.Info("Agg fast path succeeded",
 		zap.String("index", indexName),
@@ -478,14 +529,17 @@ func convertExecutorAggregation(agg *executor.AggregationResult) *AggregationRes
 		if b.Key == "" && b.NumericKey != 0 {
 			key = b.NumericKey
 		}
-		result.Buckets[i] = &AggregationBucket{
+		bucket := &AggregationBucket{
 			Key:      key,
 			DocCount: b.DocCount,
-			SubAggs:  make(map[string]*AggregationResult),
 		}
-		for subName, subAgg := range b.SubAggs {
-			result.Buckets[i].SubAggs[subName] = convertExecutorAggregation(subAgg)
+		if len(b.SubAggs) > 0 {
+			bucket.SubAggs = make(map[string]*AggregationResult, len(b.SubAggs))
+			for subName, subAgg := range b.SubAggs {
+				bucket.SubAggs[subName] = convertExecutorAggregation(subAgg)
+			}
 		}
+		result.Buckets[i] = bucket
 	}
 
 	return result
@@ -549,16 +603,17 @@ func (qs *QueryService) convertAggregation(agg *planner.AggregationResult) *Aggr
 
 	// Convert buckets
 	for i, bucket := range agg.Buckets {
-		result.Buckets[i] = &AggregationBucket{
+		b := &AggregationBucket{
 			Key:      bucket.Key,
 			DocCount: bucket.DocCount,
-			SubAggs:  make(map[string]*AggregationResult),
 		}
-
-		// Convert sub-aggregations recursively
-		for subName, subAgg := range bucket.SubAggs {
-			result.Buckets[i].SubAggs[subName] = qs.convertAggregation(subAgg)
+		if len(bucket.SubAggs) > 0 {
+			b.SubAggs = make(map[string]*AggregationResult, len(bucket.SubAggs))
+			for subName, subAgg := range bucket.SubAggs {
+				b.SubAggs[subName] = qs.convertAggregation(subAgg)
+			}
 		}
+		result.Buckets[i] = b
 	}
 
 	// For stats aggregations

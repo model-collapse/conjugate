@@ -1590,7 +1590,7 @@ type SearchHit struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Score         float64                `protobuf:"fixed64,2,opt,name=score,proto3" json:"score,omitempty"`
-	Source        *structpb.Struct       `protobuf:"bytes,3,opt,name=source,proto3" json:"source,omitempty"`
+	SourceJson    []byte                 `protobuf:"bytes,3,opt,name=source_json,json=sourceJson,proto3" json:"source_json,omitempty"`
 	Sort          []float64              `protobuf:"fixed64,4,rep,packed,name=sort,proto3" json:"sort,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1640,9 +1640,9 @@ func (x *SearchHit) GetScore() float64 {
 	return 0
 }
 
-func (x *SearchHit) GetSource() *structpb.Struct {
+func (x *SearchHit) GetSourceJson() []byte {
 	if x != nil {
-		return x.Source
+		return x.SourceJson
 	}
 	return nil
 }
@@ -2615,11 +2615,12 @@ const file_pkg_common_proto_data_proto_rawDesc = "" +
 	"\x04hits\x18\x03 \x03(\v2\x19.conjugate.data.SearchHitR\x04hits\"=\n" +
 	"\tTotalHits\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\x03R\x05value\x12\x1a\n" +
-	"\brelation\x18\x02 \x01(\tR\brelation\"v\n" +
+	"\brelation\x18\x02 \x01(\tR\brelation\"f\n" +
 	"\tSearchHit\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
-	"\x05score\x18\x02 \x01(\x01R\x05score\x12/\n" +
-	"\x06source\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06source\x12\x12\n" +
+	"\x05score\x18\x02 \x01(\x01R\x05score\x12\x1f\n" +
+	"\vsource_json\x18\x03 \x01(\fR\n" +
+	"sourceJson\x12\x12\n" +
 	"\x04sort\x18\x04 \x03(\x01R\x04sort\"\xbb\x04\n" +
 	"\x11AggregationResult\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12;\n" +
@@ -2799,46 +2800,45 @@ var file_pkg_common_proto_data_proto_depIdxs = []int32{
 	38, // 10: conjugate.data.SearchResponse.aggregations:type_name -> conjugate.data.SearchResponse.AggregationsEntry
 	25, // 11: conjugate.data.SearchHits.total:type_name -> conjugate.data.TotalHits
 	26, // 12: conjugate.data.SearchHits.hits:type_name -> conjugate.data.SearchHit
-	42, // 13: conjugate.data.SearchHit.source:type_name -> google.protobuf.Struct
-	28, // 14: conjugate.data.AggregationResult.buckets:type_name -> conjugate.data.AggregationBucket
-	39, // 15: conjugate.data.AggregationResult.values:type_name -> conjugate.data.AggregationResult.ValuesEntry
-	40, // 16: conjugate.data.AggregationBucket.sub_aggregations:type_name -> conjugate.data.AggregationBucket.SubAggregationsEntry
-	32, // 17: conjugate.data.DataNodeStats.shards:type_name -> conjugate.data.ShardStats
-	27, // 18: conjugate.data.SearchResponse.AggregationsEntry.value:type_name -> conjugate.data.AggregationResult
-	27, // 19: conjugate.data.AggregationBucket.SubAggregationsEntry.value:type_name -> conjugate.data.AggregationResult
-	1,  // 20: conjugate.data.DataService.CreateShard:input_type -> conjugate.data.CreateShardRequest
-	3,  // 21: conjugate.data.DataService.DeleteShard:input_type -> conjugate.data.DeleteShardRequest
-	5,  // 22: conjugate.data.DataService.GetShardInfo:input_type -> conjugate.data.GetShardInfoRequest
-	7,  // 23: conjugate.data.DataService.RefreshShard:input_type -> conjugate.data.RefreshShardRequest
-	9,  // 24: conjugate.data.DataService.FlushShard:input_type -> conjugate.data.FlushShardRequest
-	11, // 25: conjugate.data.DataService.IndexDocument:input_type -> conjugate.data.IndexDocumentRequest
-	13, // 26: conjugate.data.DataService.GetDocument:input_type -> conjugate.data.GetDocumentRequest
-	15, // 27: conjugate.data.DataService.DeleteDocument:input_type -> conjugate.data.DeleteDocumentRequest
-	17, // 28: conjugate.data.DataService.BulkIndex:input_type -> conjugate.data.BulkIndexRequest
-	21, // 29: conjugate.data.DataService.Search:input_type -> conjugate.data.SearchRequest
-	29, // 30: conjugate.data.DataService.Count:input_type -> conjugate.data.CountRequest
-	31, // 31: conjugate.data.DataService.GetShardStats:input_type -> conjugate.data.GetShardStatsRequest
-	33, // 32: conjugate.data.DataService.GetNodeStats:input_type -> conjugate.data.GetNodeStatsRequest
-	35, // 33: conjugate.data.DataService.ForceMerge:input_type -> conjugate.data.ForceMergeRequest
-	2,  // 34: conjugate.data.DataService.CreateShard:output_type -> conjugate.data.CreateShardResponse
-	4,  // 35: conjugate.data.DataService.DeleteShard:output_type -> conjugate.data.DeleteShardResponse
-	6,  // 36: conjugate.data.DataService.GetShardInfo:output_type -> conjugate.data.ShardInfo
-	8,  // 37: conjugate.data.DataService.RefreshShard:output_type -> conjugate.data.RefreshShardResponse
-	10, // 38: conjugate.data.DataService.FlushShard:output_type -> conjugate.data.FlushShardResponse
-	12, // 39: conjugate.data.DataService.IndexDocument:output_type -> conjugate.data.IndexDocumentResponse
-	14, // 40: conjugate.data.DataService.GetDocument:output_type -> conjugate.data.GetDocumentResponse
-	16, // 41: conjugate.data.DataService.DeleteDocument:output_type -> conjugate.data.DeleteDocumentResponse
-	19, // 42: conjugate.data.DataService.BulkIndex:output_type -> conjugate.data.BulkIndexResponse
-	22, // 43: conjugate.data.DataService.Search:output_type -> conjugate.data.SearchResponse
-	30, // 44: conjugate.data.DataService.Count:output_type -> conjugate.data.CountResponse
-	32, // 45: conjugate.data.DataService.GetShardStats:output_type -> conjugate.data.ShardStats
-	34, // 46: conjugate.data.DataService.GetNodeStats:output_type -> conjugate.data.DataNodeStats
-	36, // 47: conjugate.data.DataService.ForceMerge:output_type -> conjugate.data.ForceMergeResponse
-	34, // [34:48] is the sub-list for method output_type
-	20, // [20:34] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	28, // 13: conjugate.data.AggregationResult.buckets:type_name -> conjugate.data.AggregationBucket
+	39, // 14: conjugate.data.AggregationResult.values:type_name -> conjugate.data.AggregationResult.ValuesEntry
+	40, // 15: conjugate.data.AggregationBucket.sub_aggregations:type_name -> conjugate.data.AggregationBucket.SubAggregationsEntry
+	32, // 16: conjugate.data.DataNodeStats.shards:type_name -> conjugate.data.ShardStats
+	27, // 17: conjugate.data.SearchResponse.AggregationsEntry.value:type_name -> conjugate.data.AggregationResult
+	27, // 18: conjugate.data.AggregationBucket.SubAggregationsEntry.value:type_name -> conjugate.data.AggregationResult
+	1,  // 19: conjugate.data.DataService.CreateShard:input_type -> conjugate.data.CreateShardRequest
+	3,  // 20: conjugate.data.DataService.DeleteShard:input_type -> conjugate.data.DeleteShardRequest
+	5,  // 21: conjugate.data.DataService.GetShardInfo:input_type -> conjugate.data.GetShardInfoRequest
+	7,  // 22: conjugate.data.DataService.RefreshShard:input_type -> conjugate.data.RefreshShardRequest
+	9,  // 23: conjugate.data.DataService.FlushShard:input_type -> conjugate.data.FlushShardRequest
+	11, // 24: conjugate.data.DataService.IndexDocument:input_type -> conjugate.data.IndexDocumentRequest
+	13, // 25: conjugate.data.DataService.GetDocument:input_type -> conjugate.data.GetDocumentRequest
+	15, // 26: conjugate.data.DataService.DeleteDocument:input_type -> conjugate.data.DeleteDocumentRequest
+	17, // 27: conjugate.data.DataService.BulkIndex:input_type -> conjugate.data.BulkIndexRequest
+	21, // 28: conjugate.data.DataService.Search:input_type -> conjugate.data.SearchRequest
+	29, // 29: conjugate.data.DataService.Count:input_type -> conjugate.data.CountRequest
+	31, // 30: conjugate.data.DataService.GetShardStats:input_type -> conjugate.data.GetShardStatsRequest
+	33, // 31: conjugate.data.DataService.GetNodeStats:input_type -> conjugate.data.GetNodeStatsRequest
+	35, // 32: conjugate.data.DataService.ForceMerge:input_type -> conjugate.data.ForceMergeRequest
+	2,  // 33: conjugate.data.DataService.CreateShard:output_type -> conjugate.data.CreateShardResponse
+	4,  // 34: conjugate.data.DataService.DeleteShard:output_type -> conjugate.data.DeleteShardResponse
+	6,  // 35: conjugate.data.DataService.GetShardInfo:output_type -> conjugate.data.ShardInfo
+	8,  // 36: conjugate.data.DataService.RefreshShard:output_type -> conjugate.data.RefreshShardResponse
+	10, // 37: conjugate.data.DataService.FlushShard:output_type -> conjugate.data.FlushShardResponse
+	12, // 38: conjugate.data.DataService.IndexDocument:output_type -> conjugate.data.IndexDocumentResponse
+	14, // 39: conjugate.data.DataService.GetDocument:output_type -> conjugate.data.GetDocumentResponse
+	16, // 40: conjugate.data.DataService.DeleteDocument:output_type -> conjugate.data.DeleteDocumentResponse
+	19, // 41: conjugate.data.DataService.BulkIndex:output_type -> conjugate.data.BulkIndexResponse
+	22, // 42: conjugate.data.DataService.Search:output_type -> conjugate.data.SearchResponse
+	30, // 43: conjugate.data.DataService.Count:output_type -> conjugate.data.CountResponse
+	32, // 44: conjugate.data.DataService.GetShardStats:output_type -> conjugate.data.ShardStats
+	34, // 45: conjugate.data.DataService.GetNodeStats:output_type -> conjugate.data.DataNodeStats
+	36, // 46: conjugate.data.DataService.ForceMerge:output_type -> conjugate.data.ForceMergeResponse
+	33, // [33:47] is the sub-list for method output_type
+	19, // [19:33] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_pkg_common_proto_data_proto_init() }

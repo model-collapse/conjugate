@@ -7,10 +7,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	pb "github.com/conjugate/conjugate/pkg/common/proto"
 	"github.com/conjugate/conjugate/pkg/data/diagon"
 )
+
+// sanitizeBucketKey ensures a bucket key is valid UTF-8 for proto3 gRPC marshaling.
+func sanitizeBucketKey(key string) string {
+	if utf8.ValidString(key) {
+		return key
+	}
+	return strings.ToValidUTF8(key, "\uFFFD")
+}
 
 // computeDataNodeAggregations computes aggregations from search results on the data node.
 // This avoids transferring all documents to the coordinator for aggregation.
@@ -123,7 +132,7 @@ func computeTermsAggData(hits []*diagon.Hit, field string, body map[string]inter
 	buckets := make([]*pb.AggregationBucket, len(sorted))
 	for i, kv := range sorted {
 		bucket := &pb.AggregationBucket{
-			Key:      kv.key,
+			Key:      sanitizeBucketKey(kv.key),
 			DocCount: kv.count,
 		}
 		if len(subAggsMap) > 0 {
@@ -675,7 +684,7 @@ func computeTermsAggFromColumn(vals []string, numDocs int, body map[string]inter
 
 	buckets := make([]*pb.AggregationBucket, len(sorted))
 	for i, kv := range sorted {
-		buckets[i] = &pb.AggregationBucket{Key: kv.key, DocCount: kv.count}
+		buckets[i] = &pb.AggregationBucket{Key: sanitizeBucketKey(kv.key), DocCount: kv.count}
 	}
 	return &pb.AggregationResult{Type: "terms", Buckets: buckets}
 }
@@ -871,7 +880,7 @@ func computeTermsAggDocValues(docs []diagon.AggDocValues, field string, body map
 	buckets := make([]*pb.AggregationBucket, len(sorted))
 	for i, kv := range sorted {
 		bucket := &pb.AggregationBucket{
-			Key:      kv.key,
+			Key:      sanitizeBucketKey(kv.key),
 			DocCount: kv.count,
 		}
 		if bucketDocs != nil {
@@ -1372,7 +1381,7 @@ func computeSignificantTermsAggData(hits []*diagon.Hit, field string, body map[s
 
 	buckets := make([]*pb.AggregationBucket, len(scored))
 	for i, ts := range scored {
-		buckets[i] = &pb.AggregationBucket{Key: ts.key, DocCount: ts.count}
+		buckets[i] = &pb.AggregationBucket{Key: sanitizeBucketKey(ts.key), DocCount: ts.count}
 	}
 
 	return &pb.AggregationResult{Type: "significant_terms", Buckets: buckets}
@@ -1409,7 +1418,7 @@ func computeSignificantTermsAggDocValues(docs []diagon.AggDocValues, field strin
 
 	buckets := make([]*pb.AggregationBucket, len(scored))
 	for i, ts := range scored {
-		buckets[i] = &pb.AggregationBucket{Key: ts.key, DocCount: ts.count}
+		buckets[i] = &pb.AggregationBucket{Key: sanitizeBucketKey(ts.key), DocCount: ts.count}
 	}
 
 	return &pb.AggregationResult{Type: "significant_terms", Buckets: buckets}
@@ -1515,7 +1524,7 @@ func buildMultiTermsResult(counts map[string]int64, size int) *pb.AggregationRes
 	buckets := make([]*pb.AggregationBucket, len(sorted))
 	for i, kv := range sorted {
 		displayKey := strings.ReplaceAll(kv.key, "\x00", "|")
-		buckets[i] = &pb.AggregationBucket{Key: displayKey, DocCount: kv.count}
+		buckets[i] = &pb.AggregationBucket{Key: sanitizeBucketKey(displayKey), DocCount: kv.count}
 	}
 
 	return &pb.AggregationResult{Type: "multi_terms", Buckets: buckets}
@@ -1700,7 +1709,7 @@ func buildCompositeResult(counts map[string]int64, size int, sources []composite
 	buckets := make([]*pb.AggregationBucket, len(sorted))
 	for i, kv := range sorted {
 		displayKey := strings.ReplaceAll(kv.key, "\x00", "|")
-		buckets[i] = &pb.AggregationBucket{Key: displayKey, DocCount: kv.count}
+		buckets[i] = &pb.AggregationBucket{Key: sanitizeBucketKey(displayKey), DocCount: kv.count}
 	}
 
 	return &pb.AggregationResult{Type: "composite", Buckets: buckets}

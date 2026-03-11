@@ -202,7 +202,7 @@ message TotalHits {
 message SearchHit {
   string id = 1;
   double score = 2;
-  google.protobuf.Struct source = 3;
+  bytes source_json = 3;
   repeated double sort = 4;
 }
 
