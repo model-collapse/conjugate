@@ -1595,36 +1595,144 @@ func computeCompositeAggFromColumns(columnData map[string][]string, numDocs int,
 		sourceColumns[i] = col
 	}
 
-	counts := make(map[string]int64)
+	allTerms := true
+	for _, src := range sources {
+		if src.sourceType != "" && src.sourceType != "terms" {
+			allTerms = false
+			break
+		}
+	}
+
+	// Fast path for all-terms composite with 2 sources (most common case).
+	// Uses nested maps so column cache strings serve directly as map keys —
+	// zero per-doc string allocation. Without this, 116M keyBuf.String() calls
+	// create ~4.6 GB of garbage, causing GC to dominate (>2 min for 116M docs).
+	if allTerms && len(sources) == 2 {
+		return computeCompositeTerms2FromColumns(sourceColumns, numDocs, size, sources, mask)
+	}
+
+	// General path: intern column values to uint32 IDs, then count using uint64 keys.
+	// This avoids per-doc string allocation while supporting N sources.
+	return computeCompositeGeneralFromColumns(sourceColumns, numDocs, size, sources, allTerms, mask)
+}
+
+// computeCompositeTerms2FromColumns handles the common 2-source all-terms composite
+// using nested maps for zero per-doc allocation.
+func computeCompositeTerms2FromColumns(sourceColumns [][]string, numDocs, size int, sources []compositeSource, mask []bool) *pb.AggregationResult {
+	col0 := sourceColumns[0]
+	col1 := sourceColumns[1]
+	outer := make(map[string]map[string]int64)
+
 	for docIdx := 0; docIdx < numDocs; docIdx++ {
 		if mask != nil && (docIdx >= len(mask) || !mask[docIdx]) {
 			continue
 		}
+		if docIdx >= len(col0) || docIdx >= len(col1) {
+			break
+		}
+		v0 := col0[docIdx]
+		v1 := col1[docIdx]
+		if v0 == "" || v1 == "" {
+			continue
+		}
+		inner := outer[v0]
+		if inner == nil {
+			inner = make(map[string]int64)
+			outer[v0] = inner
+		}
+		inner[v1]++
+	}
 
-		// Build composite key from column values
-		skip := false
-		parts := make([]string, len(sources))
-		for si, src := range sources {
-			col := sourceColumns[si]
-			if docIdx >= len(col) {
-				skip = true
-				break
+	// Flatten nested map to flat counts with composite key format
+	counts := make(map[string]int64, len(outer)*10)
+	prefix0 := sources[0].name + "="
+	prefix1 := sources[1].name + "="
+	for v0, inner := range outer {
+		key0 := prefix0 + v0
+		for v1, count := range inner {
+			counts[key0+"\x00"+prefix1+v1] = count
+		}
+	}
+	return buildCompositeResult(counts, size, sources)
+}
+
+// computeCompositeGeneralFromColumns handles N-source composite aggs by interning
+// column values to integer IDs, then counting with uint64 composite keys.
+func computeCompositeGeneralFromColumns(sourceColumns [][]string, numDocs, size int, sources []compositeSource, allTerms bool, mask []bool) *pb.AggregationResult {
+	nSrc := len(sources)
+
+	// Intern: map each unique column value to a uint32 ID
+	type internDict struct {
+		m    map[string]uint32
+		vals []string // reverse: id → string
+	}
+	dicts := make([]internDict, nSrc)
+	ids := make([][]uint32, nSrc) // per-source, per-doc integer ID
+
+	const emptyID = ^uint32(0) // sentinel for missing/empty values
+
+	for si := range sources {
+		col := sourceColumns[si]
+		dicts[si].m = make(map[string]uint32)
+		docIDs := make([]uint32, numDocs)
+		for docIdx := 0; docIdx < numDocs; docIdx++ {
+			if docIdx >= len(col) || col[docIdx] == "" {
+				docIDs[docIdx] = emptyID
+				continue
 			}
 			v := col[docIdx]
-			if v == "" {
+			if !allTerms {
+				v = compositeSourceValue(v, sources[si])
+				if v == "" {
+					docIDs[docIdx] = emptyID
+					continue
+				}
+			}
+			id, ok := dicts[si].m[v]
+			if !ok {
+				id = uint32(len(dicts[si].vals))
+				dicts[si].m[v] = id
+				dicts[si].vals = append(dicts[si].vals, v)
+			}
+			docIDs[docIdx] = id
+		}
+		ids[si] = docIDs
+	}
+
+	// Count using string composite key of interned IDs
+	counts := make(map[string]int64)
+	keyParts := make([]byte, 0, nSrc*4)
+	for docIdx := 0; docIdx < numDocs; docIdx++ {
+		if mask != nil && (docIdx >= len(mask) || !mask[docIdx]) {
+			continue
+		}
+		skip := false
+		keyParts = keyParts[:0]
+		for si := 0; si < nSrc; si++ {
+			id := ids[si][docIdx]
+			if id == emptyID {
 				skip = true
 				break
 			}
-			parts[si] = src.name + "=" + compositeSourceValue(v, src)
+			keyParts = append(keyParts, byte(id>>24), byte(id>>16), byte(id>>8), byte(id))
 		}
 		if skip {
 			continue
 		}
-		key := strings.Join(parts, "\x00")
-		counts[key]++
+		counts[string(keyParts)]++
 	}
 
-	return buildCompositeResult(counts, size, sources)
+	// Convert back to string keys for buildCompositeResult
+	strCounts := make(map[string]int64, len(counts))
+	for intKey, count := range counts {
+		parts := make([]string, nSrc)
+		for si := 0; si < nSrc; si++ {
+			id := uint32(intKey[si*4])<<24 | uint32(intKey[si*4+1])<<16 | uint32(intKey[si*4+2])<<8 | uint32(intKey[si*4+3])
+			parts[si] = sources[si].name + "=" + dicts[si].vals[id]
+		}
+		strCounts[strings.Join(parts, "\x00")] = count
+	}
+	return buildCompositeResult(strCounts, size, sources)
 }
 
 func computeCompositeAggData(hits []*diagon.Hit, body map[string]interface{}) *pb.AggregationResult {

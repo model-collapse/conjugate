@@ -3294,6 +3294,113 @@ func (s *Shard) DirectAggColumns(fields []string) (int64, map[string][]string, i
 	return totalDocs, columnData, numDocs, nil
 }
 
+// DirectAggColumnsSampled is like DirectAggColumns but caps the scan at maxDocs.
+// Used for composite aggs on cold cache where scanning all 116M docs is too slow.
+// Results are NOT stored in the column cache since they're partial.
+func (s *Shard) DirectAggColumnsSampled(fields []string, maxDocs int) (int64, map[string][]string, int, error) {
+	s.mu.RLock()
+	needReopen := s.readerDirty || s.reader == nil
+	s.mu.RUnlock()
+
+	if needReopen {
+		s.mu.Lock()
+		needReopen = s.readerDirty || s.reader == nil
+		if needReopen {
+			if s.readerDirty && s.writer != nil {
+				C.diagon_commit(s.writer)
+			}
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+				s.reader = nil
+			}
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader != nil {
+				s.searcher = C.diagon_create_index_searcher(s.reader)
+			}
+			s.readerDirty = false
+		}
+		s.mu.Unlock()
+	}
+
+	s.mu.RLock()
+	if s.reader == nil {
+		s.mu.RUnlock()
+		return 0, nil, 0, fmt.Errorf("reader not initialized")
+	}
+	totalDocs := int64(C.diagon_reader_num_docs(s.reader))
+	s.mu.RUnlock()
+
+	if len(fields) == 0 || maxDocs <= 0 {
+		return totalDocs, nil, 0, nil
+	}
+
+	const chunkSize = 500000
+	chunkBufSize := chunkSize * 128
+
+	columnData := make(map[string][]string, len(fields))
+	for _, f := range fields {
+		cap := maxDocs
+		if cap > int(totalDocs) {
+			cap = int(totalDocs)
+		}
+		columnData[f] = make([]string, 0, cap)
+	}
+
+	// Start from the end of the index to avoid legacy docs without stored fields.
+	// Early docs (pre-stored-field era) have empty values; newer docs at the end
+	// have proper stored fields.
+	maxDocID := int(C.diagon_reader_max_doc(s.reader))
+	startDocID := maxDocID - maxDocs
+	if startDocID < 0 {
+		startDocID = 0
+	}
+
+	s.mu.RLock()
+	for _, field := range fields {
+		buf := make([]byte, chunkBufSize)
+		lengths := make([]C.int, chunkSize)
+		cField := C.CString(field)
+		nextDocID := C.int(startDocID)
+		collected := 0
+
+		for nextDocID >= 0 && collected < maxDocs {
+			var cNextDocID C.int
+			n := int(C.batch_scan_field_values_from(
+				s.reader, cField,
+				(*C.char)(unsafe.Pointer(&buf[0])), C.int(chunkBufSize),
+				&lengths[0], C.int(chunkSize),
+				nextDocID, &cNextDocID))
+
+			offset := 0
+			for i := 0; i < n && collected < maxDocs; i++ {
+				l := int(lengths[i])
+				if l > 0 && offset+l <= len(buf) {
+					columnData[field] = append(columnData[field], string(buf[offset:offset+l]))
+					offset += l + 1
+				} else {
+					columnData[field] = append(columnData[field], "")
+				}
+				collected++
+			}
+			nextDocID = cNextDocID
+		}
+		C.free(unsafe.Pointer(cField))
+	}
+	s.mu.RUnlock()
+
+	numDocs := 0
+	for _, vals := range columnData {
+		numDocs = len(vals)
+		break
+	}
+
+	return totalDocs, columnData, numDocs, nil
+}
+
 // DocCount returns the number of documents in the shard index.
 func (s *Shard) DocCount() int64 {
 	s.mu.RLock()

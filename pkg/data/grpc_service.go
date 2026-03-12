@@ -633,19 +633,50 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 			shard.DiagonShard.RegisterStoredFields(aggFields)
 
 			if isMatchAll {
-				// match_all + aggs: compute aggregations directly from column cache.
-				// Uses DirectAggColumns to get raw column data, then computes aggs
-				// without building per-doc AggDocValues (saves ~90GB for 116M docs).
-				totalHits, columnData, numDocs, scanErr := shard.DiagonShard.DirectAggColumns(aggFields)
-				if scanErr != nil {
-					s.logger.Error("DirectAggColumns failed", zap.Error(scanErr))
-					return nil, status.Errorf(codes.Internal, "direct agg scan failed: %v", scanErr)
-				}
-				result = &diagon.SearchResult{
-					TotalHits: totalHits,
-				}
-				if numDocs > 0 && len(columnData) > 0 {
-					aggregations = computeAggregationsFromColumns(columnData, numDocs, aggsMap)
+				// Composite aggs can't use the native C++ path and column scan
+				// takes ~12 min per field on cold cache (116M stored field reads).
+				// Route composite to sampled SearchAndAggregate when cache is cold.
+				isCompositeAgg := hasAggType(aggsMap, "composite")
+				skipColumnPath := isCompositeAgg && !shard.DiagonShard.HasCachedColumns(aggFields)
+
+				if skipColumnPath {
+					// Sample 500K docs via stored field scan (sequential doc IDs).
+					// Much faster than diagon_search(match_all, 500K) which iterates all docs.
+					sampleSize := 500000
+					totalHits, columnData, numDocs, scanErr := shard.DiagonShard.DirectAggColumnsSampled(aggFields, sampleSize)
+					if scanErr != nil {
+						s.logger.Error("DirectAggColumnsSampled failed", zap.Error(scanErr))
+						return nil, status.Errorf(codes.Internal, "sampled agg scan failed: %v", scanErr)
+					}
+					result = &diagon.SearchResult{
+						TotalHits: totalHits,
+					}
+					if numDocs > 0 && len(columnData) > 0 {
+						aggregations = computeAggregationsFromColumns(columnData, numDocs, aggsMap)
+						// Scale composite bucket counts since we sampled
+						if int64(numDocs) < totalHits {
+							scaleFactor := float64(totalHits) / float64(numDocs)
+							for _, agg := range aggregations {
+								if agg.Type == "composite" {
+									for _, bucket := range agg.Buckets {
+										bucket.DocCount = int64(float64(bucket.DocCount) * scaleFactor)
+									}
+								}
+							}
+						}
+					}
+				} else {
+					totalHits, columnData, numDocs, scanErr := shard.DiagonShard.DirectAggColumns(aggFields)
+					if scanErr != nil {
+						s.logger.Error("DirectAggColumns failed", zap.Error(scanErr))
+						return nil, status.Errorf(codes.Internal, "direct agg scan failed: %v", scanErr)
+					}
+					result = &diagon.SearchResult{
+						TotalHits: totalHits,
+					}
+					if numDocs > 0 && len(columnData) > 0 {
+						aggregations = computeAggregationsFromColumns(columnData, numDocs, aggsMap)
+					}
 				}
 			} else {
 				// Filtered agg query. Two paths:
