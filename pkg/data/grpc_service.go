@@ -74,10 +74,11 @@ const searchCacheTTL = 30 * time.Second
 // DataService implements the gRPC DataService
 type DataService struct {
 	pb.UnimplementedDataServiceServer
-	node        *DataNode
-	logger      *zap.Logger
-	aggCache    sync.Map // map[string]*aggCacheEntry
-	searchCache sync.Map // map[string]*searchCacheEntry
+	node              *DataNode
+	logger            *zap.Logger
+	aggCache          sync.Map // map[string]*aggCacheEntry
+	searchCache       sync.Map // map[string]*searchCacheEntry
+	fieldNamesQueried sync.Map // map[indexName]bool — tracks whether we've fetched field names from master
 }
 
 // NewDataService creates a new data service
@@ -86,6 +87,55 @@ func NewDataService(node *DataNode, logger *zap.Logger) *DataService {
 		node:   node,
 		logger: logger,
 	}
+}
+
+// ensureStoredFieldNames fetches index field mappings from the master once per index
+// and registers them with the shard. This enables _source reconstruction for legacy docs.
+func (s *DataService) ensureStoredFieldNames(ctx context.Context, indexName string, shard *Shard) {
+	if _, loaded := s.fieldNamesQueried.LoadOrStore(indexName, true); loaded {
+		return // already done for this index
+	}
+
+	// Check if shard already has field names (from _stored_fields.json).
+	existing := shard.DiagonShard.GetKnownStoredFields()
+	if len(existing) > 0 {
+		return
+	}
+
+	// Query master for index metadata to get field mappings.
+	go func() {
+		mc := s.node.masterClient
+		if mc == nil {
+			return
+		}
+		resp, err := mc.GetIndexMetadata(ctx, indexName)
+		if err != nil || resp == nil || resp.Metadata == nil {
+			s.logger.Debug("Could not fetch index metadata for field discovery",
+				zap.String("index", indexName), zap.Error(err))
+			return
+		}
+		// Extract field names from mappings (flatten nested properties).
+		var fields []string
+		var extractFields func(prefix string, mappings map[string]*pb.FieldMapping)
+		extractFields = func(prefix string, mappings map[string]*pb.FieldMapping) {
+			for name, fm := range mappings {
+				fullName := name
+				if prefix != "" {
+					fullName = prefix + "." + name
+				}
+				fields = append(fields, fullName)
+				if fm != nil && len(fm.Properties) > 0 {
+					extractFields(fullName, fm.Properties)
+				}
+			}
+		}
+		extractFields("", resp.Metadata.Mappings)
+		if len(fields) > 0 {
+			shard.DiagonShard.RegisterStoredFields(fields)
+			s.logger.Info("Registered stored field names from master",
+				zap.String("index", indexName), zap.Int("count", len(fields)))
+		}
+	}()
 }
 
 // searchCacheKey generates a cache key for search results.
@@ -470,6 +520,9 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 		return nil, status.Errorf(codes.NotFound, "shard not found: %v", err)
 	}
 
+	// Ensure stored field names are registered for _source reconstruction.
+	s.ensureStoredFieldNames(ctx, req.IndexName, shard)
+
 	startTime := time.Now()
 
 	// Check if query contains aggregation definitions (push-down from coordinator).
@@ -576,6 +629,9 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 		if len(aggsMap) > 0 && (maxResults == 0 || maxResults > 100) {
 			aggFields := extractAggregationFields(aggsMap)
 
+			// Register agg field names for _source reconstruction of legacy docs.
+			shard.DiagonShard.RegisterStoredFields(aggFields)
+
 			if isMatchAll {
 				// match_all + aggs: compute aggregations directly from column cache.
 				// Uses DirectAggColumns to get raw column data, then computes aggs
@@ -640,6 +696,13 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 					if aggMaxResults <= 0 || aggMaxResults > 5000000 {
 						aggMaxResults = 5000000
 					}
+					// For composite aggs, use a smaller sample to avoid 40s+ latency.
+					// 500K sampled docs gives statistically accurate bucket proportions.
+					// Counts are scaled up by totalHits/sampleSize after aggregation.
+					isCompositeAgg := hasAggType(aggsMap, "composite")
+					if isCompositeAgg && aggMaxResults > 500000 {
+						aggMaxResults = 500000
+					}
 					totalHits, aggDocs, searchErr := shard.DiagonShard.SearchAndAggregate(queryBytes, aggMaxResults, aggFields)
 					if searchErr != nil {
 						s.logger.Error("SearchAndAggregate failed", zap.Error(searchErr))
@@ -650,6 +713,17 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 					}
 					if len(aggDocs) > 0 {
 						aggregations = computeAggregationsFromDocValues(aggDocs, aggsMap)
+						// Scale composite bucket counts if we sampled
+						if isCompositeAgg && int64(len(aggDocs)) < totalHits && len(aggDocs) > 0 {
+							scaleFactor := float64(totalHits) / float64(len(aggDocs))
+							for _, agg := range aggregations {
+								if agg.Type == "composite" {
+									for _, bucket := range agg.Buckets {
+										bucket.DocCount = int64(float64(bucket.DocCount) * scaleFactor)
+									}
+								}
+							}
+						}
 					}
 				}
 			}
@@ -1584,6 +1658,22 @@ func parseDateBound(val interface{}) (float64, bool) {
 
 // extractAggregationFields extracts the list of field names needed by aggregation definitions.
 // Used to enable field-only extraction mode (skip _source JSON parsing).
+// hasAggType checks if any aggregation in aggsMap has the given type.
+func hasAggType(aggsMap map[string]interface{}, aggType string) bool {
+	for _, aggDef := range aggsMap {
+		aggDefMap, ok := aggDef.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		for t := range aggDefMap {
+			if t == aggType {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func extractAggregationFields(aggsMap map[string]interface{}) []string {
 	fieldSet := make(map[string]bool)
 	extractFieldsRecursive(aggsMap, fieldSet)
@@ -1698,6 +1788,7 @@ func extractFilterFieldsRecursive(queryMap map[string]interface{}, fields map[st
 
 // isColumnEligibleFilter checks if a query filter can be evaluated against column data.
 // Returns true for: term, terms, and bool(must/filter) of term/terms.
+// NOTE: range is NOT eligible because stored field scan for date parsing is too slow (116M × 7µs = 12min).
 func isColumnEligibleFilter(queryMap map[string]interface{}) bool {
 	if queryMap == nil {
 		return false

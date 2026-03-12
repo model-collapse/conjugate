@@ -557,6 +557,7 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"runtime"
 	goSort "sort"
@@ -799,6 +800,9 @@ func (db *DiagonBridge) CreateShard(path string) (*Shard, error) {
 		logger:    db.logger.With(zap.String("shard_path", path)),
 	}
 
+	// Load persisted stored field names (for _source reconstruction of legacy docs).
+	shard.loadStoredFieldNames()
+
 	db.shards[path] = shard
 
 	shard.logger.Info("Created real Diagon shard with IndexWriter")
@@ -842,6 +846,236 @@ type Shard struct {
 	columnCacheMu sync.RWMutex
 	columnCacheN  int // number of docs in cache (all columns same length)
 
+	// knownStoredFields tracks field names that have been stored in the index.
+	// Used to reconstruct _source for docs indexed before _source storage was added.
+	// Populated during BulkIndexDocuments and persisted to _stored_fields.json.
+	knownStoredFields   map[string]bool
+	knownStoredFieldsMu sync.RWMutex
+}
+
+// storedFieldNamesFile is the filename for persisted field names alongside shard data.
+const storedFieldNamesFile = "_stored_fields.json"
+
+// loadStoredFieldNames loads known field names from the shard directory.
+func (s *Shard) loadStoredFieldNames() {
+	p := filepath.Join(s.path, storedFieldNamesFile)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return // file doesn't exist yet — will be created on first BulkIndex
+	}
+	var names []string
+	if err := json.Unmarshal(data, &names); err != nil {
+		return
+	}
+	s.knownStoredFieldsMu.Lock()
+	if s.knownStoredFields == nil {
+		s.knownStoredFields = make(map[string]bool, len(names))
+	}
+	for _, n := range names {
+		s.knownStoredFields[n] = true
+	}
+	s.knownStoredFieldsMu.Unlock()
+	s.logger.Info("Loaded stored field names", zap.Int("count", len(names)))
+}
+
+// saveStoredFieldNames persists the known field name set to disk.
+func (s *Shard) saveStoredFieldNames() {
+	s.knownStoredFieldsMu.RLock()
+	names := make([]string, 0, len(s.knownStoredFields))
+	for n := range s.knownStoredFields {
+		names = append(names, n)
+	}
+	s.knownStoredFieldsMu.RUnlock()
+	goSort.Strings(names)
+	data, err := json.Marshal(names)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(s.path, storedFieldNamesFile), data, 0644)
+}
+
+// trackFieldNames records field names from an indexed document.
+func (s *Shard) trackFieldNames(flatDoc map[string]interface{}) {
+	s.knownStoredFieldsMu.Lock()
+	if s.knownStoredFields == nil {
+		s.knownStoredFields = make(map[string]bool, len(flatDoc))
+	}
+	for k := range flatDoc {
+		s.knownStoredFields[k] = true
+	}
+	s.knownStoredFieldsMu.Unlock()
+}
+
+// RegisterStoredFields adds field names to the known set and persists them.
+// Called by the gRPC service when it discovers field names from index mappings.
+func (s *Shard) RegisterStoredFields(fields []string) {
+	s.knownStoredFieldsMu.Lock()
+	if s.knownStoredFields == nil {
+		s.knownStoredFields = make(map[string]bool, len(fields))
+	}
+	added := false
+	for _, f := range fields {
+		if !s.knownStoredFields[f] {
+			s.knownStoredFields[f] = true
+			added = true
+		}
+	}
+	s.knownStoredFieldsMu.Unlock()
+	if added {
+		go s.saveStoredFieldNames()
+	}
+}
+
+// GetKnownStoredFields returns the current set of known field names, or nil if empty.
+func (s *Shard) GetKnownStoredFields() []string {
+	s.knownStoredFieldsMu.RLock()
+	defer s.knownStoredFieldsMu.RUnlock()
+	if len(s.knownStoredFields) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(s.knownStoredFields))
+	for n := range s.knownStoredFields {
+		names = append(names, n)
+	}
+	return names
+}
+
+// discoverStoredFields probes a sample document to discover stored field names.
+// Used for indices that were created before field name tracking was added.
+// Requires the reader to be open and the caller to hold at least s.mu.RLock().
+func (s *Shard) discoverStoredFields() {
+	s.knownStoredFieldsMu.RLock()
+	if len(s.knownStoredFields) > 0 {
+		s.knownStoredFieldsMu.RUnlock()
+		return
+	}
+	s.knownStoredFieldsMu.RUnlock()
+
+	// Gather candidate field names from columnCache (populated by prior agg queries).
+	s.columnCacheMu.RLock()
+	candidates := make([]string, 0, len(s.columnCache)+16)
+	for f := range s.columnCache {
+		candidates = append(candidates, f)
+	}
+	s.columnCacheMu.RUnlock()
+
+	if len(candidates) == 0 {
+		return // No hints available — will be populated on first BulkIndex or agg query
+	}
+
+	// Probe the first valid document for each candidate field name.
+	if s.reader == nil {
+		return
+	}
+	maxDoc := int(C.diagon_reader_max_doc(s.reader))
+	if maxDoc <= 0 {
+		return
+	}
+
+	fieldBuf := make([]byte, 4096)
+	found := make(map[string]bool, len(candidates))
+
+	// Try a few documents in case the first ones are deleted/empty.
+	for docID := 0; docID < maxDoc && docID < 100; docID++ {
+		diagonDoc := C.diagon_reader_get_document(s.reader, C.int(docID))
+		if diagonDoc == nil {
+			continue
+		}
+		for _, name := range candidates {
+			if found[name] {
+				continue
+			}
+			cName := C.CString(name)
+			if C.diagon_document_get_field_value(diagonDoc, cName,
+				(*C.char)(unsafe.Pointer(&fieldBuf[0])), C.size_t(len(fieldBuf))) {
+				found[name] = true
+			}
+			C.free(unsafe.Pointer(cName))
+		}
+		C.diagon_free_document(diagonDoc)
+		if len(found) == len(candidates) {
+			break
+		}
+	}
+
+	if len(found) > 0 {
+		s.knownStoredFieldsMu.Lock()
+		if s.knownStoredFields == nil {
+			s.knownStoredFields = make(map[string]bool, len(found))
+		}
+		for f := range found {
+			s.knownStoredFields[f] = true
+		}
+		s.knownStoredFieldsMu.Unlock()
+		s.saveStoredFieldNames()
+		s.logger.Info("Discovered stored fields from sample document", zap.Int("count", len(found)))
+	}
+}
+
+// reconstructSource reads individual stored field values from a Diagon document
+// and builds a map representing _source. Used for legacy docs without _source stored field.
+// fieldNames must be pre-allocated C strings. fieldBuf is a reusable scratch buffer.
+func reconstructSourceFromFields(diagonDoc C.DiagonDocument, fieldNames []string, cFieldPtrs []*C.char, fieldBuf []byte) (map[string]interface{}, []byte) {
+	doc := make(map[string]interface{}, len(fieldNames))
+	for i, cFN := range cFieldPtrs {
+		if C.diagon_document_get_field_value(diagonDoc, cFN,
+			(*C.char)(unsafe.Pointer(&fieldBuf[0])), C.size_t(len(fieldBuf))) {
+			for j := 0; j < len(fieldBuf); j++ {
+				if fieldBuf[j] == 0 {
+					if j > 0 {
+						val := string(fieldBuf[:j])
+						// Try to parse as number for correct JSON types
+						if n, err := strconv.ParseFloat(val, 64); err == nil && !strings.ContainsAny(val, "T-:Z+") {
+							doc[fieldNames[i]] = n
+						} else {
+							doc[fieldNames[i]] = val
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+	if len(doc) == 0 {
+		return nil, nil
+	}
+	// Unflatten dotted field paths back to nested maps
+	nested := unflattenMap(doc)
+	sourceJSON, _ := json.Marshal(nested)
+	return nested, sourceJSON
+}
+
+// unflattenMap converts dotted field paths back to nested maps.
+// e.g. {"cloud.region": "us-west-2"} -> {"cloud": {"region": "us-west-2"}}
+func unflattenMap(flat map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{}, len(flat))
+	for key, val := range flat {
+		parts := strings.Split(key, ".")
+		if len(parts) == 1 {
+			result[key] = val
+			continue
+		}
+		// Walk/create nested maps
+		m := result
+		for i := 0; i < len(parts)-1; i++ {
+			sub, ok := m[parts[i]]
+			if !ok {
+				sub = make(map[string]interface{})
+				m[parts[i]] = sub
+			}
+			if subMap, ok := sub.(map[string]interface{}); ok {
+				m = subMap
+			} else {
+				// Conflict — flat value at parent level, skip nesting
+				m = nil
+				break
+			}
+		}
+		if m != nil {
+			m[parts[len(parts)-1]] = val
+		}
+	}
+	return result
 }
 
 // isKeywordLike returns true if a string value looks like a keyword (enum/identifier)
@@ -1385,6 +1619,17 @@ func (s *Shard) BulkIndexDocuments(docs []struct {
 	}
 
 	s.readerDirty = true
+
+	// Track field names from the first doc in this batch (all docs share schema).
+	if len(docs) > 0 && docs[0].Doc != nil {
+		flatDoc := flattenMap("", docs[0].Doc)
+		prevCount := len(s.knownStoredFields)
+		s.trackFieldNames(flatDoc)
+		if len(s.knownStoredFields) > prevCount {
+			go s.saveStoredFieldNames() // async persist
+		}
+	}
+
 	s.logger.Debug("Bulk indexed documents to RAM buffer",
 		zap.Int("count", numDocs))
 
@@ -2082,6 +2327,10 @@ func (s *Shard) matchAllShortcut(totalStart time.Time, reopenTime, parseTime tim
 	var sourceBuf []byte
 	var cFieldNames []*C.char
 
+	// Fallback field names for _source reconstruction (legacy docs without _source stored field).
+	var fallbackFieldNames []string
+	var fallbackCFieldPtrs []*C.char
+
 	if len(fieldsOnly) > 0 {
 		cFieldNames = make([]*C.char, len(fieldsOnly))
 		for i, f := range fieldsOnly {
@@ -2092,6 +2341,16 @@ func (s *Shard) matchAllShortcut(totalStart time.Time, reopenTime, parseTime tim
 		cSourceField = C.CString("_source")
 		defer C.free(unsafe.Pointer(cSourceField))
 		sourceBuf = make([]byte, 65536)
+
+		// Pre-allocate C strings for fallback field reconstruction.
+		fallbackFieldNames = s.GetKnownStoredFields()
+		if len(fallbackFieldNames) > 0 {
+			fallbackCFieldPtrs = make([]*C.char, len(fallbackFieldNames))
+			for i, f := range fallbackFieldNames {
+				fallbackCFieldPtrs[i] = C.CString(f)
+				defer C.free(unsafe.Pointer(fallbackCFieldPtrs[i]))
+			}
+		}
 	}
 
 	fieldBuf := make([]byte, 4096)
@@ -2193,17 +2452,20 @@ func (s *Shard) matchAllShortcut(totalStart time.Time, reopenTime, parseTime tim
 					}
 				}
 			}
+			// Fallback: reconstruct _source from individual stored fields
+			if doc == nil && len(fallbackCFieldPtrs) > 0 {
+				doc, sourceJSONBytes = reconstructSourceFromFields(
+					diagonDoc, fallbackFieldNames, fallbackCFieldPtrs, fieldBuf)
+			}
 		}
 
 		C.diagon_free_document(diagonDoc)
 
+		// Skip docs with no stored content — these are legacy documents
+		// indexed before _source storage was implemented. Returning empty
+		// _source: {} provides no value; continue to find docs with content.
 		if doc == nil {
-			// Skip docs with no stored fields when sorting — they lack
-			// field values needed for correct sort ordering.
-			if hasSortField {
-				continue
-			}
-			doc = make(map[string]interface{})
+			continue
 		}
 
 		hits = append(hits, &Hit{
@@ -2372,6 +2634,11 @@ func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults
 	var cSourceField *C.char
 	var sourceBuf []byte
 	var cFieldNames []*C.char
+
+	// Fallback field names for _source reconstruction (legacy docs without _source stored field).
+	var fallbackFieldNames []string
+	var fallbackCFieldPtrs []*C.char
+
 	if len(fieldsOnly) > 0 {
 		// Fields-only mode: pre-allocate C strings for each field
 		cFieldNames = make([]*C.char, len(fieldsOnly))
@@ -2384,6 +2651,16 @@ func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults
 		cSourceField = C.CString("_source")
 		defer C.free(unsafe.Pointer(cSourceField))
 		sourceBuf = make([]byte, 65536)
+
+		// Pre-allocate C strings for fallback field reconstruction.
+		fallbackFieldNames = s.GetKnownStoredFields()
+		if len(fallbackFieldNames) > 0 {
+			fallbackCFieldPtrs = make([]*C.char, len(fallbackFieldNames))
+			for i, f := range fallbackFieldNames {
+				fallbackCFieldPtrs[i] = C.CString(f)
+				defer C.free(unsafe.Pointer(fallbackCFieldPtrs[i]))
+			}
+		}
 	}
 
 	s.mu.RLock()
@@ -2451,10 +2728,16 @@ func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults
 					}
 				}
 			}
+			// Fallback: reconstruct _source from individual stored fields
+			if doc == nil && len(fallbackCFieldPtrs) > 0 {
+				doc, sourceJSONBytes = reconstructSourceFromFields(
+					diagonDoc, fallbackFieldNames, fallbackCFieldPtrs, fieldBuf)
+			}
 		}
 
 		C.diagon_free_document(diagonDoc)
 
+		// Skip docs with no stored content (legacy docs without _source)
 		if doc == nil {
 			doc = make(map[string]interface{})
 		}
@@ -3467,7 +3750,21 @@ func (s *Shard) GetDocument(docID string) (map[string]interface{}, error) {
 		}
 	}
 
-	// Fallback
+	// Fallback: reconstruct from individual stored fields
+	fieldNames := s.GetKnownStoredFields()
+	if len(fieldNames) > 0 {
+		fieldBuf := make([]byte, 4096)
+		cFieldPtrs := make([]*C.char, len(fieldNames))
+		for i, f := range fieldNames {
+			cFieldPtrs[i] = C.CString(f)
+			defer C.free(unsafe.Pointer(cFieldPtrs[i]))
+		}
+		doc, _ := reconstructSourceFromFields(diagonDoc, fieldNames, cFieldPtrs, fieldBuf)
+		if doc != nil {
+			return doc, nil
+		}
+	}
+
 	return map[string]interface{}{"_id": docID}, nil
 }
 
@@ -3950,3 +4247,4 @@ func (s *Shard) CountQuery(queryObj map[string]interface{}) int64 {
 	C.diagon_free_top_docs(td)
 	return hits
 }
+

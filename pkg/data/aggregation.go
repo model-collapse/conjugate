@@ -620,6 +620,14 @@ func computeAggregationsFromColumnsFiltered(columnData map[string][]string, numD
 				continue
 			}
 
+			if aggType == "composite" {
+				result := computeCompositeAggFromColumns(columnData, numDocs, bodyMap, mask)
+				if result != nil {
+					results[name] = result
+				}
+				continue
+			}
+
 			result := computeSingleAggFromColumnsFiltered(columnData, numDocs, aggType, bodyMap, mask)
 			if result != nil {
 				results[name] = result
@@ -676,6 +684,11 @@ func computeSingleAggFromColumnsFiltered(columnData map[string][]string, numDocs
 			}
 		}
 		return &pb.AggregationResult{Type: "cardinality", Count: int64(len(uniq))}
+	case "composite":
+		// Composite needs access to all column data, not just one field.
+		// This case is handled separately in computeCompositeAggFromColumns.
+		// Return nil here; the caller handles it.
+		return nil
 	}
 	return nil
 }
@@ -1555,6 +1568,64 @@ func buildMultiTermsResult(counts map[string]int64, size int) *pb.AggregationRes
 }
 
 // --- Composite Aggregation ---
+
+// computeCompositeAggFromColumns computes composite aggregation from column data with an
+// optional boolean mask. This avoids per-doc stored field extraction (7µs/doc) by iterating
+// pre-loaded column arrays (~0 cost/doc). For 12M matching docs this is ~100ms vs ~84s.
+func computeCompositeAggFromColumns(columnData map[string][]string, numDocs int, body map[string]interface{}, mask []bool) *pb.AggregationResult {
+	size := 10
+	if s, ok := body["size"].(float64); ok {
+		size = int(s)
+	} else if s, ok := body["size"].(int); ok {
+		size = s
+	}
+
+	sources := parseCompositeSources(body)
+	if len(sources) == 0 {
+		return nil
+	}
+
+	// Pre-resolve column arrays for each source
+	sourceColumns := make([][]string, len(sources))
+	for i, src := range sources {
+		col := columnData[src.field]
+		if col == nil {
+			return nil // Missing column data, can't compute
+		}
+		sourceColumns[i] = col
+	}
+
+	counts := make(map[string]int64)
+	for docIdx := 0; docIdx < numDocs; docIdx++ {
+		if mask != nil && (docIdx >= len(mask) || !mask[docIdx]) {
+			continue
+		}
+
+		// Build composite key from column values
+		skip := false
+		parts := make([]string, len(sources))
+		for si, src := range sources {
+			col := sourceColumns[si]
+			if docIdx >= len(col) {
+				skip = true
+				break
+			}
+			v := col[docIdx]
+			if v == "" {
+				skip = true
+				break
+			}
+			parts[si] = src.name + "=" + compositeSourceValue(v, src)
+		}
+		if skip {
+			continue
+		}
+		key := strings.Join(parts, "\x00")
+		counts[key]++
+	}
+
+	return buildCompositeResult(counts, size, sources)
+}
 
 func computeCompositeAggData(hits []*diagon.Hit, body map[string]interface{}) *pb.AggregationResult {
 	size := 10
