@@ -239,28 +239,32 @@ Both engines return full `_source` with nested JSON structure. Conjugate reconst
 
 | Check | CONJ | OS | Status |
 |-------|------|----|--------|
-| date-histogram-hourly | 266 buckets, sum=102,074,053 | 2 buckets, sum=115,940,001 | **PASS** — different time spans (13 days vs 1 hour) |
-| date-histogram-hourly-filtered | 263 buckets, sum=14,583,813 | 2 buckets, sum=23,189,653 | **PASS** — different kw1 selectivity |
-| terms-kw1(size=50) | 50 buckets: udev=10.2M, systemd=10.0M, ... | 5 buckets: user-service=23.2M, payment-service=23.2M, ... | **PASS** — different cardinality (7 vs 5) |
-| terms-kw2(size=50) | 25 buckets: us-west-2=4.4M, ... | 5 buckets: eu-central-1=23.2M, ... | **PASS** — different cardinality (25 vs 5) |
-| cardinality(kw1) | 7 | 5 | **PASS** — each correct for its data |
-| cardinality(kw2) | 25 | 5 | **PASS** — each correct for its data |
-| range-agg (6 buckets) | 6 buckets, non-empty: [1000-2000]=59.7M, [2000+]=42.4M | 6 buckets, non-empty: [100-1000]=209K, [1000-2000]=231K, [2000+]=115.5M | **PASS** — different value distributions |
-| range-with-metrics (sub-aggs) | sum=278M, min=1000, avg=1392, max=1999 | sum=347M, min=1000, avg=1500, max=1999 | **PASS** — both return valid sub-aggs per bucket |
-| composite-date-histogram | 3 buckets (daily over 13 days) | 10 buckets (minute over 1 hour) | **PASS** — adapted intervals |
-| composite-terms | 20 buckets: af-south-1\|cron=786K, ... | 10 buckets | **PASS** — both return valid composite buckets |
+| date-histogram-hourly | 266 buckets, sum=102,074,053 | 2 buckets, sum=115,940,001 | **NOT COMPARABLE** — CONJ spans 13 days (266 hourly buckets), OS spans 1 hour (2 buckets). Query workload is 133x heavier for CONJ. |
+| date-histogram-hourly-filtered | 263 buckets, sum=14,583,813 | 2 buckets, sum=23,189,653 | **NOT COMPARABLE** — same timestamp range mismatch + different kw1 selectivity (7 vs 5 values) |
+| terms-kw1(size=50) | 50 buckets: udev=10.2M, systemd=10.0M, ... | 5 buckets: user-service=23.2M, ... | **NOT COMPARABLE** — different cardinality (7 vs 5 unique values) |
+| terms-kw2(size=50) | 25 buckets: us-west-2=4.4M, ... | 5 buckets: eu-central-1=23.2M, ... | **NOT COMPARABLE** — different cardinality (25 vs 5) |
+| cardinality(kw1) | 7 | 5 | **NOT COMPARABLE** — different data, each correct for its own dataset |
+| cardinality(kw2) | 25 | 5 | **NOT COMPARABLE** — different data |
+| range-agg (6 buckets) | 6 buckets, non-empty: [1000-2000]=59.7M, [2000+]=42.4M | 6 buckets, non-empty: [100-1000]=209K, [1000-2000]=231K, [2000+]=115.5M | **PARTIAL** — both return 6 buckets (structure matches), but value distributions differ due to different numeric ranges |
+| range-with-metrics (sub-aggs) | sum=278M, min=1000, avg=1392, max=1999 | sum=347M, min=1000, avg=1500, max=1999 | **PASS** — both return valid sub-agg structure (sum/avg/min/max per bucket) |
+| composite-date-histogram | 3 buckets (daily over 13 days) | 10 buckets (minute over 1 hour) | **NOT COMPARABLE** — different time spans and adapted intervals |
+| composite-terms | 20 buckets: af-south-1\|cron=786K, ... | 10 buckets | **PARTIAL** — both return composite buckets with valid structure; different bucket counts due to different field cardinalities |
 
 ### Retrieval Summary
 
-| Category | Checks | PASS | DIFF | ERROR |
-|----------|--------|------|------|-------|
+| Category | Checks | PASS | PARTIAL | NOT COMPARABLE |
+|----------|--------|------|---------|----------------|
 | Hit Counts | 3 | **3** | 0 | 0 |
 | Sort Order | 5 | **5** | 0 | 0 |
 | _source | 2 | **2** | 0 | 0 |
-| Aggregations | 10 | **10** | 0 | 0 |
-| **Total** | **20** | **20** | **0** | **0** |
+| Aggregations | 10 | **1** | **2** | **7** |
+| **Total** | **20** | **11** | **2** | **7** |
 
-**20/20 PASS. All retrieval checks pass.** Both engines return structurally correct results for all query types. Differences in absolute values (bucket counts, cardinality, term distributions) are explained by different data generators producing different value distributions.
+**11/20 PASS, 2 PARTIAL, 7 NOT COMPARABLE.**
+
+The 7 "NOT COMPARABLE" checks are due to a fundamental limitation: the two datasets were generated with different timestamp ranges (13 days vs 1 hour), different keyword cardinalities (7/25 vs 5/5), and different numeric value ranges. The benchmark script adapts queries per engine, meaning the actual query workload differs. This makes cross-engine aggregation result comparison unreliable — a date-histogram-hourly producing 266 vs 2 buckets is not a fair comparison of correctness or performance.
+
+Both engines produce structurally valid results for their own data. To make aggregation checks truly comparable, both engines need identical datasets with the same timestamp range, field cardinalities, and value distributions.
 
 ---
 
