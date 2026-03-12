@@ -602,6 +602,13 @@ func (p *Planner) planLimit(logical *LogicalLimit) (PhysicalPlan, error) {
 		return nil, err
 	}
 
+	// Propagate limit to data node scan so it returns enough docs.
+	// Without this, PhysicalScan.MaxResults stays at 100 regardless of user's size.
+	maxResults := int(logical.Offset + logical.Limit)
+	if maxResults > 0 {
+		setChildScanMaxResults(child, maxResults)
+	}
+
 	cost := p.CostModel.EstimateLimitCost(logical, child.Cost())
 	return &PhysicalLimit{
 		Offset:        logical.Offset,
@@ -621,6 +628,12 @@ func (p *Planner) planTopN(logical *LogicalTopN) (PhysicalPlan, error) {
 	// Push sort info to child scan so data node can optimize (e.g. reverse read for desc sort)
 	sortStrings := sortFieldsToStrings(logical.SortFields)
 	setChildScanSort(child, sortStrings)
+
+	// Propagate limit to data node scan so it returns enough docs for sorting.
+	maxResults := int(logical.Offset + logical.N)
+	if maxResults > 0 {
+		setChildScanMaxResults(child, maxResults)
+	}
 
 	// TopN is more efficient than separate Sort + Limit for small N
 	// Cost is roughly: child cost + N * log(N) for heap maintenance

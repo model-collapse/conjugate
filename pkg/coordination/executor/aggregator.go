@@ -44,9 +44,10 @@ func (qe *QueryExecutor) aggregateSearchResults(responses []*pb.SearchResponse, 
 					json.Unmarshal(hit.SourceJson, &sourceMap)
 				}
 				allHits = append(allHits, &SearchHit{
-					ID:     hit.Id,
-					Score:  hit.Score,
-					Source: sourceMap,
+					ID:         hit.Id,
+					Score:      hit.Score,
+					Source:     sourceMap,
+					SortValues: hit.Sort,
 				})
 			}
 		}
@@ -291,7 +292,7 @@ func (qe *QueryExecutor) mergeSubAggregations(subAggsByName map[string][]*pb.Agg
 		subType := subAggs[0].Type
 		var result *AggregationResult
 		switch subType {
-		case "terms", "histogram", "date_histogram":
+		case "terms", "histogram", "date_histogram", "range", "filters":
 			result = qe.mergeBucketAggregation(subAggs)
 		case "stats":
 			result = qe.mergeStatsAggregation(subAggs, false)
@@ -326,25 +327,49 @@ func (qe *QueryExecutor) mergeRangeAggregation(aggs []*pb.AggregationResult) *Ag
 	firstAgg := aggs[0]
 	buckets := make([]*AggregationBucket, len(firstAgg.Buckets))
 
+	// Collect sub-aggregations per bucket key across all shards
+	subAggsByBucket := make(map[string]map[string][]*pb.AggregationResult)
+
 	// Initialize buckets from first shard
 	for i, bucket := range firstAgg.Buckets {
 		buckets[i] = &AggregationBucket{
 			Key:      bucket.Key,
 			DocCount: bucket.DocCount,
 		}
-		// Note: from/to fields will be added when protobuf is regenerated
+		// Collect sub-aggs from first shard
+		if len(bucket.SubAggregations) > 0 {
+			subAggsByBucket[bucket.Key] = make(map[string][]*pb.AggregationResult)
+			for subName, subAgg := range bucket.SubAggregations {
+				subAggsByBucket[bucket.Key][subName] = append(subAggsByBucket[bucket.Key][subName], subAgg)
+			}
+		}
 	}
 
-	// Sum counts from remaining shards (matching by key)
+	// Sum counts and collect sub-aggs from remaining shards (matching by key)
 	for shardIdx := 1; shardIdx < len(aggs); shardIdx++ {
 		for _, bucket := range aggs[shardIdx].Buckets {
-			// Find matching bucket by key
 			for i, resultBucket := range buckets {
 				if resultBucket.Key == bucket.Key {
 					buckets[i].DocCount += bucket.DocCount
+					// Collect sub-aggs
+					if len(bucket.SubAggregations) > 0 {
+						if subAggsByBucket[bucket.Key] == nil {
+							subAggsByBucket[bucket.Key] = make(map[string][]*pb.AggregationResult)
+						}
+						for subName, subAgg := range bucket.SubAggregations {
+							subAggsByBucket[bucket.Key][subName] = append(subAggsByBucket[bucket.Key][subName], subAgg)
+						}
+					}
 					break
 				}
 			}
+		}
+	}
+
+	// Merge sub-aggregations for each bucket
+	for i, bucket := range buckets {
+		if subAggs, ok := subAggsByBucket[bucket.Key]; ok {
+			buckets[i].SubAggs = qe.mergeSubAggregations(subAggs)
 		}
 	}
 

@@ -443,7 +443,8 @@ type AggregationBucket struct {
 
 // SearchHit represents a single search hit
 type SearchHit struct {
-	ID     string
-	Score  float64
-	Source map[string]interface{}
+	ID         string
+	Score      float64
+	Source     map[string]interface{}
+	SortValues []float64
 }

@@ -1519,6 +1519,9 @@ func (c *CoordinationNode) convertSearchResultToResponse(result *SearchResult, e
 		if !excludeSource {
 			hitData["_source"] = hit.Source
 		}
+		if len(hit.SortValues) > 0 {
+			hitData["sort"] = hit.SortValues
+		}
 		hits = append(hits, hitData)
 	}
 
@@ -1587,8 +1590,17 @@ func (c *CoordinationNode) convertAggregationToResponse(agg *AggregationResult) 
 		result["avg"] = agg.Avg
 		result["sum"] = agg.Sum
 
-	case "sum", "avg", "min", "max", "cardinality":
-		// Single-value aggregations
+	case "sum":
+		result["value"] = agg.Sum
+	case "avg":
+		result["value"] = agg.Avg
+	case "min":
+		result["value"] = agg.Min
+	case "max":
+		result["value"] = agg.Max
+	case "value_count":
+		result["value"] = agg.Count
+	case "cardinality":
 		result["value"] = agg.Value
 
 	default:

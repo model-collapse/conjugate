@@ -592,22 +592,65 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 					aggregations = computeAggregationsFromColumns(columnData, numDocs, aggsMap)
 				}
 			} else {
-				// Filtered agg query: need diagon_search to apply filter.
-				// Cap maxResults to avoid allocating massive heaps (116M = 1.4GB).
-				aggMaxResults := maxResults
-				if aggMaxResults <= 0 || aggMaxResults > 5000000 {
-					aggMaxResults = 5000000
+				// Filtered agg query. Two paths:
+				// (1) Column-based: load filter + agg field columns, filter in Go. O(N) sequential.
+				//     Best for simple filters (term/terms) on large result sets.
+				// (2) SearchAndAggregate: use C++ search + per-doc stored field extraction.
+				//     Fallback for complex queries (match, wildcard, etc.).
+				var filterQueryMap map[string]interface{}
+				if q, ok := wrappedQuery["query"]; ok {
+					filterQueryMap, _ = q.(map[string]interface{})
 				}
-				totalHits, aggDocs, searchErr := shard.DiagonShard.SearchAndAggregate(queryBytes, aggMaxResults, aggFields)
-				if searchErr != nil {
-					s.logger.Error("SearchAndAggregate failed", zap.Error(searchErr))
-					return nil, status.Errorf(codes.Internal, "search failed: %v", searchErr)
-				}
-				result = &diagon.SearchResult{
-					TotalHits: totalHits,
-				}
-				if len(aggDocs) > 0 {
-					aggregations = computeAggregationsFromDocValues(aggDocs, aggsMap)
+
+				if filterQueryMap != nil && isColumnEligibleFilter(filterQueryMap) {
+					// Column-based filtered aggregation: ~3s vs 49s for 14.5M matching docs
+					filterFields := extractQueryFilterFields(filterQueryMap)
+					allFields := make([]string, 0, len(aggFields)+len(filterFields))
+					seen := make(map[string]bool)
+					for _, f := range aggFields {
+						if !seen[f] {
+							allFields = append(allFields, f)
+							seen[f] = true
+						}
+					}
+					for _, f := range filterFields {
+						if !seen[f] {
+							allFields = append(allFields, f)
+							seen[f] = true
+						}
+					}
+
+					totalHits, columnData, numDocs, scanErr := shard.DiagonShard.DirectAggColumns(allFields)
+					if scanErr != nil {
+						s.logger.Error("DirectAggColumns (filtered) failed", zap.Error(scanErr))
+						return nil, status.Errorf(codes.Internal, "direct agg scan failed: %v", scanErr)
+					}
+
+					mask, matchCount := buildColumnFilterMask(filterQueryMap, columnData, numDocs)
+					result = &diagon.SearchResult{
+						TotalHits: matchCount,
+					}
+					_ = totalHits // total docs in index (not filtered count)
+					if numDocs > 0 && len(columnData) > 0 {
+						aggregations = computeAggregationsFromColumnsFiltered(columnData, numDocs, aggsMap, mask)
+					}
+				} else {
+					// Fallback: SearchAndAggregate with per-doc stored field extraction.
+					aggMaxResults := maxResults
+					if aggMaxResults <= 0 || aggMaxResults > 5000000 {
+						aggMaxResults = 5000000
+					}
+					totalHits, aggDocs, searchErr := shard.DiagonShard.SearchAndAggregate(queryBytes, aggMaxResults, aggFields)
+					if searchErr != nil {
+						s.logger.Error("SearchAndAggregate failed", zap.Error(searchErr))
+						return nil, status.Errorf(codes.Internal, "search failed: %v", searchErr)
+					}
+					result = &diagon.SearchResult{
+						TotalHits: totalHits,
+					}
+					if len(aggDocs) > 0 {
+						aggregations = computeAggregationsFromDocValues(aggDocs, aggsMap)
+					}
 				}
 			}
 		} else if len(aggsMap) > 0 {
@@ -698,11 +741,29 @@ func (s *DataService) Search(ctx context.Context, req *pb.SearchRequest) (*pb.Se
 				if sourceJSON == nil && hit.Source != nil {
 					sourceJSON, _ = json.Marshal(hit.Source)
 				}
-				hits = append(hits, &pb.SearchHit{
+				protoHit := &pb.SearchHit{
 					Id:         hit.ID,
 					Score:      hit.Score,
 					SourceJson: sourceJSON,
-				})
+				}
+				// Populate sort values if present
+				if len(hit.SortValues) > 0 {
+					sortDoubles := make([]float64, len(hit.SortValues))
+					for si, sv := range hit.SortValues {
+						switch v := sv.(type) {
+						case float64:
+							sortDoubles[si] = v
+						case int64:
+							sortDoubles[si] = float64(v)
+						case int:
+							sortDoubles[si] = float64(v)
+						default:
+							sortDoubles[si] = 0
+						}
+					}
+					protoHit.Sort = sortDoubles
+				}
+				hits = append(hits, protoHit)
 			}
 			// Store in search cache with pre-built proto hits
 			if pendingCacheKey != "" {
@@ -1208,8 +1269,9 @@ func computeNativeDateHistogram(diagonShard *diagon.Shard, bodyMap map[string]in
 	maxEpochMs := float64(time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC).UnixMilli())
 
 	// Check if filter is a range on the same field — if so, narrow bounds and use BKD.
-	// For non-range filters (term, bool with term clauses), return nil to fall through.
+	// For other filters (term, bool with term clauses), use collector-based search+histogram.
 	rangeOnSameField := false
+	useCollectorPath := false
 	if filterQuery != nil {
 		if rangeQ, ok := filterQuery["range"].(map[string]interface{}); ok {
 			if fieldRange, ok := rangeQ[field].(map[string]interface{}); ok {
@@ -1236,9 +1298,41 @@ func computeNativeDateHistogram(diagonShard *diagon.Shard, bodyMap map[string]in
 				}
 			}
 		}
-		// If filter involves fields OTHER than the histogram field, can't use BKD single-pass.
 		if !rangeOnSameField {
+			// Cross-field filter: use collector-based path (search + DocValues)
+			useCollectorPath = true
+		}
+	}
+
+	if useCollectorPath {
+		// Collector-based: iterate matching docs using scorer, read @timestamp
+		// via NumericDocValues (O(1) per doc, column-oriented). Avoids TopDocs
+		// heap and stored field extraction entirely.
+		queryBytes, err := json.Marshal(filterQuery)
+		if err != nil {
+			logger.Debug("Failed to marshal filter query", zap.Error(err))
 			return nil
+		}
+		totalHits, buckets, err := diagonShard.SearchWithDateHistogram(
+			queryBytes, field, intervalMs, minEpochMs, maxEpochMs)
+		if err != nil {
+			logger.Debug("SearchWithDateHistogram failed", zap.Error(err))
+			return nil
+		}
+		_ = totalHits
+
+		pbBuckets := make([]*pb.AggregationBucket, len(buckets))
+		for i, b := range buckets {
+			t := time.UnixMilli(int64(b.KeyMs)).UTC()
+			pbBuckets[i] = &pb.AggregationBucket{
+				Key:        t.Format(time.RFC3339),
+				NumericKey: b.KeyMs,
+				DocCount:   b.DocCount,
+			}
+		}
+		return &pb.AggregationResult{
+			Type:    "date_histogram",
+			Buckets: pbBuckets,
 		}
 	}
 
@@ -1278,19 +1372,15 @@ func computeNativeRangeAgg(diagonShard *diagon.Shard, bodyMap map[string]interfa
 		return nil
 	}
 
-	// Parse range specs
+	// Parse range specs (handles both numeric and date string values)
 	ranges := make([]diagon.RangeSpec, len(rawRanges))
 	for i, rr := range rawRanges {
 		rm, ok := rr.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if from, ok := rm["from"].(float64); ok {
-			ranges[i].From = &from
-		}
-		if to, ok := rm["to"].(float64); ok {
-			ranges[i].To = &to
-		}
+		ranges[i].From = parseRangeValue(rm["from"])
+		ranges[i].To = parseRangeValue(rm["to"])
 		if key, ok := rm["key"].(string); ok {
 			ranges[i].Key = key
 		}
@@ -1307,14 +1397,14 @@ func computeNativeRangeAgg(diagonShard *diagon.Shard, bodyMap map[string]interfa
 	for i, b := range buckets {
 		key := b.Key
 		if key == "" {
-			// Generate key: "from-to"
+			// Generate key in OpenSearch format: "from.0-to.0"
 			fromStr := "*"
 			toStr := "*"
 			if b.From != nil {
-				fromStr = strconv.FormatFloat(*b.From, 'f', -1, 64)
+				fromStr = formatRangeKey(*b.From)
 			}
 			if b.To != nil {
-				toStr = strconv.FormatFloat(*b.To, 'f', -1, 64)
+				toStr = formatRangeKey(*b.To)
 			}
 			key = fromStr + "-" + toStr
 		}
@@ -1394,6 +1484,40 @@ func computeRangeBucketSubAggs(diagonShard *diagon.Shard, rangeField string, fro
 	}
 
 	return computeAggregationsFromDocValues(aggDocs, subAggsMap)
+}
+
+// formatRangeKey formats a numeric range key in OpenSearch-compatible format.
+// Integers display as "200.0", floats as-is.
+func formatRangeKey(v float64) string {
+	if v == float64(int64(v)) {
+		return strconv.FormatFloat(v, 'f', 1, 64)
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// parseRangeValue converts a range boundary to *float64.
+// Handles: float64, int/int64 (from JSON), date strings (converted to epoch ms).
+func parseRangeValue(v interface{}) *float64 {
+	if v == nil {
+		return nil
+	}
+	switch val := v.(type) {
+	case float64:
+		return &val
+	case int:
+		f := float64(val)
+		return &f
+	case int64:
+		f := float64(val)
+		return &f
+	case string:
+		// Try parsing as date → epoch ms
+		if epochMs, ok := diagon.TryParseDateToEpochMs(val); ok {
+			f := float64(epochMs)
+			return &f
+		}
+	}
+	return nil
 }
 
 // parseIntervalToMs converts a date histogram interval string to milliseconds.
@@ -1522,6 +1646,179 @@ func extractFieldsRecursive(aggsMap map[string]interface{}, fieldSet map[string]
 						}
 					}
 				}
+			}
+		}
+	}
+}
+
+// extractQueryFilterFields returns the field names used in a query filter.
+// Supports term, terms, and bool(must/filter) of term/terms queries.
+func extractQueryFilterFields(queryMap map[string]interface{}) []string {
+	fields := make(map[string]bool)
+	extractFilterFieldsRecursive(queryMap, fields)
+	result := make([]string, 0, len(fields))
+	for f := range fields {
+		result = append(result, f)
+	}
+	return result
+}
+
+func extractFilterFieldsRecursive(queryMap map[string]interface{}, fields map[string]bool) {
+	if queryMap == nil {
+		return
+	}
+	// term: {field: value}
+	if termMap, ok := queryMap["term"].(map[string]interface{}); ok {
+		for f := range termMap {
+			fields[f] = true
+		}
+	}
+	// terms: {field: [values]}
+	if termsMap, ok := queryMap["terms"].(map[string]interface{}); ok {
+		for f := range termsMap {
+			fields[f] = true
+		}
+	}
+	// bool: {must: [...], filter: [...]}
+	if boolMap, ok := queryMap["bool"].(map[string]interface{}); ok {
+		for _, clauseKey := range []string{"must", "filter", "should"} {
+			switch clauses := boolMap[clauseKey].(type) {
+			case []interface{}:
+				for _, c := range clauses {
+					if cm, ok := c.(map[string]interface{}); ok {
+						extractFilterFieldsRecursive(cm, fields)
+					}
+				}
+			case map[string]interface{}:
+				extractFilterFieldsRecursive(clauses, fields)
+			}
+		}
+	}
+}
+
+// isColumnEligibleFilter checks if a query filter can be evaluated against column data.
+// Returns true for: term, terms, and bool(must/filter) of term/terms.
+func isColumnEligibleFilter(queryMap map[string]interface{}) bool {
+	if queryMap == nil {
+		return false
+	}
+	if _, ok := queryMap["term"]; ok {
+		return true
+	}
+	if _, ok := queryMap["terms"]; ok {
+		return true
+	}
+	if boolMap, ok := queryMap["bool"].(map[string]interface{}); ok {
+		for _, clauseKey := range []string{"must", "filter"} {
+			switch clauses := boolMap[clauseKey].(type) {
+			case []interface{}:
+				for _, c := range clauses {
+					if cm, ok := c.(map[string]interface{}); ok {
+						if !isColumnEligibleFilter(cm) {
+							return false
+						}
+					}
+				}
+			case map[string]interface{}:
+				if !isColumnEligibleFilter(clauses) {
+					return false
+				}
+			}
+		}
+		// Reject if has "should" with minimum_should_match or "must_not" — too complex
+		if _, ok := boolMap["must_not"]; ok {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// buildColumnFilterMask evaluates a query filter against column data and returns a boolean
+// mask where mask[i]=true if row i matches the filter. Also returns the match count.
+func buildColumnFilterMask(queryMap map[string]interface{}, columnData map[string][]string, numDocs int) ([]bool, int64) {
+	mask := make([]bool, numDocs)
+	for i := range mask {
+		mask[i] = true
+	}
+	applyFilterToMask(queryMap, columnData, mask)
+	var count int64
+	for _, m := range mask {
+		if m {
+			count++
+		}
+	}
+	return mask, count
+}
+
+func applyFilterToMask(queryMap map[string]interface{}, columnData map[string][]string, mask []bool) {
+	if queryMap == nil {
+		return
+	}
+	// term: {field: value} or {field: {value: v}}
+	if termMap, ok := queryMap["term"].(map[string]interface{}); ok {
+		for field, valSpec := range termMap {
+			vals := columnData[field]
+			if vals == nil {
+				// Field not in columns, mask out everything
+				for i := range mask {
+					mask[i] = false
+				}
+				return
+			}
+			var target string
+			switch v := valSpec.(type) {
+			case string:
+				target = v
+			case map[string]interface{}:
+				if tv, ok := v["value"]; ok {
+					target = fmt.Sprintf("%v", tv)
+				}
+			default:
+				target = fmt.Sprintf("%v", v)
+			}
+			for i, v := range vals {
+				if i < len(mask) && mask[i] && v != target {
+					mask[i] = false
+				}
+			}
+		}
+	}
+	// terms: {field: [val1, val2, ...]}
+	if termsMap, ok := queryMap["terms"].(map[string]interface{}); ok {
+		for field, valSpec := range termsMap {
+			vals := columnData[field]
+			if vals == nil {
+				for i := range mask {
+					mask[i] = false
+				}
+				return
+			}
+			targetSet := make(map[string]bool)
+			if arr, ok := valSpec.([]interface{}); ok {
+				for _, v := range arr {
+					targetSet[fmt.Sprintf("%v", v)] = true
+				}
+			}
+			for i, v := range vals {
+				if i < len(mask) && mask[i] && !targetSet[v] {
+					mask[i] = false
+				}
+			}
+		}
+	}
+	// bool: {must: [...], filter: [...]}
+	if boolMap, ok := queryMap["bool"].(map[string]interface{}); ok {
+		for _, clauseKey := range []string{"must", "filter"} {
+			switch clauses := boolMap[clauseKey].(type) {
+			case []interface{}:
+				for _, c := range clauses {
+					if cm, ok := c.(map[string]interface{}); ok {
+						applyFilterToMask(cm, columnData, mask)
+					}
+				}
+			case map[string]interface{}:
+				applyFilterToMask(clauses, columnData, mask)
 			}
 		}
 	}

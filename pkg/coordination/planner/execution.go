@@ -58,6 +58,10 @@ func convertExecutorResultToExecution(result *executor.SearchResult) *ExecutionR
 		}
 		row["_id"] = hit.ID
 		row["_score"] = hit.Score
+		// Carry sort values through the row map
+		if len(hit.SortValues) > 0 {
+			row["_sort_values"] = hit.SortValues
+		}
 		execResult.Rows[i] = row
 	}
 
@@ -283,12 +287,15 @@ func applyProjectionToRows(rows []map[string]interface{}, fields []string) []map
 	for i, row := range rows {
 		projectedRow := make(map[string]interface{})
 
-		// Always include _id and _score
+		// Always include _id, _score, and _sort_values
 		if id, exists := row["_id"]; exists {
 			projectedRow["_id"] = id
 		}
 		if score, exists := row["_score"]; exists {
 			projectedRow["_score"] = score
+		}
+		if sv, exists := row["_sort_values"]; exists {
+			projectedRow["_sort_values"] = sv
 		}
 
 		// Include requested fields

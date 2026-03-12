@@ -595,6 +595,14 @@ func computeAggregationsFromDocValues(docs []diagon.AggDocValues, aggsMap map[st
 // (map[field][]string) without building intermediate AggDocValues structs.
 // This avoids ~90GB memory overhead for 116M docs by iterating column arrays directly.
 func computeAggregationsFromColumns(columnData map[string][]string, numDocs int, aggsMap map[string]interface{}) map[string]*pb.AggregationResult {
+	return computeAggregationsFromColumnsFiltered(columnData, numDocs, aggsMap, nil)
+}
+
+// computeAggregationsFromColumnsFiltered computes aggregations from column data with an
+// optional boolean mask. When mask is non-nil, only rows where mask[i]=true are included.
+// This enables efficient filtered aggregations (e.g., term filter + date_histogram) by
+// scanning column data instead of per-doc stored field extraction.
+func computeAggregationsFromColumnsFiltered(columnData map[string][]string, numDocs int, aggsMap map[string]interface{}, mask []bool) map[string]*pb.AggregationResult {
 	results := make(map[string]*pb.AggregationResult)
 
 	for name, aggDef := range aggsMap {
@@ -612,7 +620,7 @@ func computeAggregationsFromColumns(columnData map[string][]string, numDocs int,
 				continue
 			}
 
-			result := computeSingleAggFromColumns(columnData, numDocs, aggType, bodyMap)
+			result := computeSingleAggFromColumnsFiltered(columnData, numDocs, aggType, bodyMap, mask)
 			if result != nil {
 				results[name] = result
 			}
@@ -623,10 +631,26 @@ func computeAggregationsFromColumns(columnData map[string][]string, numDocs int,
 }
 
 func computeSingleAggFromColumns(columnData map[string][]string, numDocs int, aggType string, body map[string]interface{}) *pb.AggregationResult {
+	return computeSingleAggFromColumnsFiltered(columnData, numDocs, aggType, body, nil)
+}
+
+func computeSingleAggFromColumnsFiltered(columnData map[string][]string, numDocs int, aggType string, body map[string]interface{}, mask []bool) *pb.AggregationResult {
 	field, _ := body["field"].(string)
 	vals := columnData[field]
 	if vals == nil {
 		return nil
+	}
+
+	// If mask provided, filter vals to only matching rows
+	if mask != nil {
+		filtered := make([]string, 0, numDocs/4)
+		for i, v := range vals {
+			if i < len(mask) && mask[i] {
+				filtered = append(filtered, v)
+			}
+		}
+		vals = filtered
+		numDocs = len(vals)
 	}
 
 	switch aggType {

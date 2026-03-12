@@ -164,9 +164,10 @@ type SearchResult struct {
 
 // SearchHit represents a single hit
 type SearchHit struct {
-	ID     string
-	Score  float64
-	Source map[string]interface{}
+	ID         string
+	Score      float64
+	Source     map[string]interface{}
+	SortValues []float64
 }
 
 // AggregationResult represents an aggregation result
@@ -575,6 +576,13 @@ func (qs *QueryService) convertToSearchResult(execResult *planner.ExecutionResul
 		if score, ok := row["_score"].(float64); ok {
 			hit.Score = score
 			delete(row, "_score")
+		}
+		// Extract sort values
+		if rawSV, exists := row["_sort_values"]; exists {
+			if sv, ok := rawSV.([]float64); ok {
+				hit.SortValues = sv
+			}
+			delete(row, "_sort_values")
 		}
 
 		// Copy remaining fields to source
