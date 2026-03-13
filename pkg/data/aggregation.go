@@ -1807,6 +1807,7 @@ type compositeSource struct {
 	field       string
 	interval    string  // For date_histogram
 	numInterval float64 // For histogram
+	order       string  // "asc" (default) or "desc"
 }
 
 func parseCompositeSources(body map[string]interface{}) []compositeSource {
@@ -1830,7 +1831,7 @@ func parseCompositeSources(body map[string]interface{}) []compositeSource {
 				if !ok {
 					continue
 				}
-				src := compositeSource{name: name, sourceType: srcType}
+				src := compositeSource{name: name, sourceType: srcType, order: "asc"}
 				if f, ok := sb["field"].(string); ok {
 					src.field = f
 				}
@@ -1843,6 +1844,9 @@ func parseCompositeSources(body map[string]interface{}) []compositeSource {
 				}
 				if v, ok := sb["interval"].(float64); ok {
 					src.numInterval = v
+				}
+				if v, ok := sb["order"].(string); ok && v == "desc" {
+					src.order = "desc"
 				}
 				sources = append(sources, src)
 			}
@@ -1904,7 +1908,12 @@ func buildCompositeResult(counts map[string]int64, size int, sources []composite
 	for k, v := range counts {
 		sorted = append(sorted, kv{k, v})
 	}
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].key < sorted[j].key })
+	descending := len(sources) > 0 && sources[0].order == "desc"
+	if descending {
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].key > sorted[j].key })
+	} else {
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].key < sorted[j].key })
+	}
 	if len(sorted) > size {
 		sorted = sorted[:size]
 	}

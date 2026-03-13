@@ -264,10 +264,27 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 		}
 		// Sort by key for date-based and composite aggs, by doc_count for others
 		switch aggType {
-		case "date_histogram", "auto_date_histogram", "composite":
+		case "date_histogram", "auto_date_histogram":
 			sort.Slice(buckets, func(i, j int) bool {
 				return buckets[i].Key < buckets[j].Key
 			})
+		case "composite":
+			// Detect sort order from the first shard's bucket ordering.
+			// Data nodes already return buckets in the correct order based on
+			// the source "order" parameter, so we infer the direction here.
+			descending := false
+			if len(aggs) > 0 && len(aggs[0].Buckets) >= 2 {
+				descending = aggs[0].Buckets[0].Key > aggs[0].Buckets[1].Key
+			}
+			if descending {
+				sort.Slice(buckets, func(i, j int) bool {
+					return buckets[i].Key > buckets[j].Key
+				})
+			} else {
+				sort.Slice(buckets, func(i, j int) bool {
+					return buckets[i].Key < buckets[j].Key
+				})
+			}
 		default: // terms, significant_terms, multi_terms, etc.
 			sort.Slice(buckets, func(i, j int) bool {
 				return buckets[i].DocCount > buckets[j].DocCount

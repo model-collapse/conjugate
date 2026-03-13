@@ -476,10 +476,47 @@ typedef struct {
     int64_t doc_count;
 } RangeAggBucketC;
 
+// bkd_range_count executes a single PointRangeQuery and returns total hits.
+// If filter_query is provided, wraps the range in a bool(must=filter, filter=range).
+static int64_t bkd_range_count(
+    DiagonIndexSearcher searcher,
+    const char* field_name,
+    double lower, double upper,
+    DiagonQuery filter_query)
+{
+    DiagonQuery rangeQ = diagon_create_double_point_range_query(field_name, lower, upper);
+    if (!rangeQ) return 0;
+
+    DiagonQuery searchQ = rangeQ;
+    if (filter_query) {
+        DiagonQuery boolQ = diagon_create_bool_query();
+        if (!boolQ) { diagon_free_query(rangeQ); return 0; }
+        diagon_bool_query_add_must(boolQ, filter_query);
+        diagon_bool_query_add_filter(boolQ, rangeQ);
+        searchQ = diagon_bool_query_build(boolQ);
+        diagon_free_query(rangeQ);
+        if (!searchQ) return 0;
+    }
+
+    DiagonTopDocs td = diagon_search(searcher, searchQ, 1);
+    diagon_free_query(searchQ);
+
+    int64_t count = 0;
+    if (td) {
+        count = diagon_top_docs_total_hits(td);
+        diagon_free_top_docs(td);
+    }
+    return count;
+}
+
 // compute_range_agg_bkd counts docs per numeric range bucket using BKD PointRangeQuery.
 // Uses PointRangeQuery (BKD tree) instead of DoubleRangeQuery (NumericDocValues) to avoid
 // counting docs that don't have the field (NumericDocValues returns 0 for missing fields).
 // Ranges are [from, to) — inclusive lower, exclusive upper.
+//
+// WORKAROUND: Diagon's DoublePointField encoding (longToBytesBE) does not flip the sign bit
+// like Lucene's longToSortableBytes. This means BKD byte comparison fails for cross-sign
+// ranges (negative lower, positive upper). We split such ranges at zero and sum the counts.
 static int compute_range_agg_bkd(
     DiagonIndexSearcher searcher,
     const char* field_name,
@@ -493,29 +530,20 @@ static int compute_range_agg_bkd(
         // Range agg uses [from, to) so adjust upper to prev representable double.
         double upper = ranges[i].has_to ? nextafter(ranges[i].to_val, -INFINITY) : 1e308;
 
-        DiagonQuery rangeQ = diagon_create_double_point_range_query(
-            field_name, lower, upper);
-        if (!rangeQ) { ranges[i].doc_count = 0; continue; }
-
-        DiagonQuery searchQ = rangeQ;
-        if (filter_query) {
-            DiagonQuery boolQ = diagon_create_bool_query();
-            if (!boolQ) { diagon_free_query(rangeQ); ranges[i].doc_count = 0; continue; }
-            diagon_bool_query_add_must(boolQ, filter_query);
-            diagon_bool_query_add_filter(boolQ, rangeQ);
-            searchQ = diagon_bool_query_build(boolQ);
-            diagon_free_query(rangeQ);
-            if (!searchQ) { ranges[i].doc_count = 0; continue; }
-        }
-
-        DiagonTopDocs td = diagon_search(searcher, searchQ, 1);
-        diagon_free_query(searchQ);
-
-        if (td) {
-            ranges[i].doc_count = diagon_top_docs_total_hits(td);
-            diagon_free_top_docs(td);
+        if (lower < 0.0 && upper >= 0.0) {
+            // Cross-sign range: split at zero to work around BKD encoding bug.
+            int64_t count = 0;
+            // Negative portion: [lower, -smallest] (only if lower < 0)
+            double neg_upper = nextafter(0.0, -INFINITY);
+            if (lower <= neg_upper) {
+                count += bkd_range_count(searcher, field_name, lower, neg_upper, filter_query);
+            }
+            // Non-negative portion: [0.0, upper]
+            count += bkd_range_count(searcher, field_name, 0.0, upper, filter_query);
+            ranges[i].doc_count = count;
         } else {
-            ranges[i].doc_count = 0;
+            // Same-sign range: BKD comparison works correctly.
+            ranges[i].doc_count = bkd_range_count(searcher, field_name, lower, upper, filter_query);
         }
     }
     return num_ranges;
@@ -1772,7 +1800,7 @@ func (s *Shard) convertQueryToDiagon(queryObj map[string]interface{}) (C.DiagonQ
 		}
 	} else if matchQuery, ok := queryObj["match"].(map[string]interface{}); ok {
 		// Match query: {"match": {"field_name": "query_text"}} or {"match": {"field_name": {"query": "text"}}}
-		// For now, treat match query as term query (no text analysis in Diagon Phase 4)
+		// Multi-word match queries are tokenized by whitespace and ORed (SHOULD clauses).
 		for field, value := range matchQuery {
 			cField := C.CString(field)
 			defer C.free(unsafe.Pointer(cField))
@@ -1790,16 +1818,50 @@ func (s *Shard) convertQueryToDiagon(queryObj map[string]interface{}) (C.DiagonQ
 				matchText = fmt.Sprintf("%v", v)
 			}
 
-			cValue := C.CString(matchText)
-			defer C.free(unsafe.Pointer(cValue))
+			tokens := strings.Fields(strings.ToLower(matchText))
+			if len(tokens) == 0 {
+				break
+			}
 
-			term := C.diagon_create_term(cField, cValue)
-			defer C.diagon_free_term(term)
+			if len(tokens) == 1 {
+				// Single token: use simple term query
+				cValue := C.CString(tokens[0])
+				defer C.free(unsafe.Pointer(cValue))
 
-			diagonQuery = C.diagon_create_term_query(term)
-			if diagonQuery == nil {
-				errMsg := C.GoString(C.diagon_last_error())
-				return nil, fmt.Errorf("failed to create match query: %s", errMsg)
+				term := C.diagon_create_term(cField, cValue)
+				defer C.diagon_free_term(term)
+
+				diagonQuery = C.diagon_create_term_query(term)
+				if diagonQuery == nil {
+					errMsg := C.GoString(C.diagon_last_error())
+					return nil, fmt.Errorf("failed to create match query: %s", errMsg)
+				}
+			} else {
+				// Multiple tokens: create BooleanQuery with SHOULD clauses (OR semantics)
+				boolQ := C.diagon_create_bool_query()
+				if boolQ == nil {
+					errMsg := C.GoString(C.diagon_last_error())
+					return nil, fmt.Errorf("failed to create bool query for match: %s", errMsg)
+				}
+
+				for _, tok := range tokens {
+					cTok := C.CString(tok)
+					term := C.diagon_create_term(cField, cTok)
+					tq := C.diagon_create_term_query(term)
+					C.free(unsafe.Pointer(cTok))
+					C.diagon_free_term(term)
+					if tq == nil {
+						continue
+					}
+					C.diagon_bool_query_add_should(boolQ, tq)
+				}
+
+				C.diagon_bool_query_set_minimum_should_match(boolQ, C.int(1))
+				diagonQuery = C.diagon_bool_query_build(boolQ)
+				if diagonQuery == nil {
+					errMsg := C.GoString(C.diagon_last_error())
+					return nil, fmt.Errorf("failed to build match bool query: %s", errMsg)
+				}
 			}
 			break // Only support single field for now
 		}
@@ -1919,12 +1981,40 @@ func (s *Shard) convertQueryToDiagon(queryObj map[string]interface{}) (C.DiagonQ
 
 			// Use BKD tree-based PointRangeQuery — O(log N) per segment.
 			// Requires fields indexed with diagon_create_double_point_field.
-			// This replaces the old DoubleRangeQuery which did O(N) doc-values scan.
-			diagonQuery = C.diagon_create_double_point_range_query(
-				cField,
-				C.double(adjLower),
-				C.double(adjUpper),
-			)
+			//
+			// WORKAROUND: Diagon's BKD encoding doesn't flip the sign bit, so cross-sign
+			// ranges (negative lower, positive upper) fail. Split at zero and OR the parts.
+			if adjLower < 0 && adjUpper >= 0 {
+				// Cross-sign range: create bool(should=[range(lower,-eps), range(0,upper)])
+				boolQ := C.diagon_create_bool_query()
+				if boolQ == nil {
+					errMsg := C.GoString(C.diagon_last_error())
+					return nil, fmt.Errorf("failed to create bool query for cross-sign range: %s", errMsg)
+				}
+
+				// Negative portion: [adjLower, nextafter(0, -inf)]
+				negUpper := C.nextafter(0.0, C.double(math.Inf(-1)))
+				negQ := C.diagon_create_double_point_range_query(cField, C.double(adjLower), negUpper)
+				if negQ != nil {
+					C.diagon_bool_query_add_should(boolQ, negQ)
+				}
+
+				// Non-negative portion: [0, adjUpper]
+				posQ := C.diagon_create_double_point_range_query(cField, C.double(0.0), C.double(adjUpper))
+				if posQ != nil {
+					C.diagon_bool_query_add_should(boolQ, posQ)
+				}
+
+				C.diagon_bool_query_set_minimum_should_match(boolQ, C.int(1))
+				diagonQuery = C.diagon_bool_query_build(boolQ)
+			} else {
+				// Same-sign range: BKD works correctly.
+				diagonQuery = C.diagon_create_double_point_range_query(
+					cField,
+					C.double(adjLower),
+					C.double(adjUpper),
+				)
+			}
 
 			if diagonQuery == nil {
 				errMsg := C.GoString(C.diagon_last_error())
@@ -3590,10 +3680,9 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	outBuckets := make([]C.TermBucketC, size)
 
 	// Cap scan at 50K docs. On cold disk (no OS file cache), stored field reads
-	// are ~240µs/doc, so 50K docs = ~12s. At 7µs/doc warm = 0.35s.
-	// 50K samples is sufficient for accurate term frequency estimation
-	// (Big5 has ~100 unique log_stream values → ~500 samples per term).
-	const maxDocsToScan = 50000
+	// At warm disk speed of ~7µs/doc, 200K docs = ~1.4s.
+	// 200K samples with stride ~50 gives ~0.5% variance vs ~2% at 50K.
+	const maxDocsToScan = 200000
 
 	n := C.compute_terms_agg_stored(
 		s.reader,
@@ -4284,6 +4373,16 @@ func (s *Shard) ComputeRangeAggBKD(field string, ranges []RangeSpec, filterQuery
 	}
 	if len(ranges) == 0 {
 		return nil, nil
+	}
+
+	// Guard: Diagon's BKD sortableDoubleBits has a bug with negative values
+	// (uses & 0x7FFF... instead of | 0x8000...), causing negative doubles to
+	// sort above positive doubles. This makes range queries with negative bounds
+	// return empty results. Fall back to doc extraction path for correctness.
+	for _, r := range ranges {
+		if (r.From != nil && *r.From < 0) || (r.To != nil && *r.To < 0) {
+			return nil, fmt.Errorf("BKD range query does not support negative bounds (sortableDoubleBits bug)")
+		}
 	}
 
 	var filterQ C.DiagonQuery
