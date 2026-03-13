@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	json "github.com/goccy/go-json"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -939,13 +941,13 @@ func (s *DataService) Count(ctx context.Context, req *pb.CountRequest) (*pb.Coun
 		}
 	}
 
-	// Execute search with size=1 to get TotalHits count
-	result, err := shard.Search(ctx, queryBytes, 1, nil)
+	// Use dedicated count API (exact, no totalHitsThreshold approximation)
+	count, err := shard.Count(ctx, queryBytes)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "count query failed: %v", err)
 	}
 
-	return &pb.CountResponse{Count: result.TotalHits}, nil
+	return &pb.CountResponse{Count: count}, nil
 }
 
 // GetShardStats returns statistics for a specific shard
@@ -1511,7 +1513,9 @@ func computeNativeRangeAgg(diagonShard *diagon.Shard, bodyMap map[string]interfa
 }
 
 // computeRangeBucketSubAggs computes sub-aggregations for a single range bucket.
-// Uses SearchAndAggregate with a range query to get matching docs, then computes aggs.
+// Fast path: uses NumericDocValues (O(1) columnar) for sub-aggs on numeric fields
+// (metrics, date_histogram, auto_date_histogram). This is 10-50× faster than stored fields.
+// Slow path: falls back to SearchAndAggregate for sub-aggs requiring string fields (terms, etc.).
 func computeRangeBucketSubAggs(diagonShard *diagon.Shard, rangeField string, from *float64, to *float64, subAggsMap map[string]interface{}, filterQuery map[string]interface{}, logger *zap.Logger) map[string]*pb.AggregationResult {
 	// Build a range query for this bucket
 	rangeClause := map[string]interface{}{}
@@ -1540,12 +1544,36 @@ func computeRangeBucketSubAggs(diagonShard *diagon.Shard, rangeField string, fro
 		queryForSearch = bucketQuery
 	}
 
-	// Extract needed fields from sub-agg definitions
-	aggFields := extractAggregationFields(subAggsMap)
-
-	// Search with capped maxResults to avoid memory explosion
 	queryBytes, _ := json.Marshal(queryForSearch)
-	const maxPerBucket = 200000 // sample 200K docs per bucket
+	const maxPerBucket = 200000
+
+	// Fast path: NumericDocValues for sub-aggs on numeric fields.
+	// Covers: sum/min/max/avg/stats/value_count AND date_histogram/auto_date_histogram (with nested metrics).
+	ndvAggDefs := extractNDVAggDefs(subAggsMap)
+	if ndvAggDefs != nil {
+		// Collect unique field names (including inner metric fields)
+		fieldSet := make(map[string]bool)
+		for _, def := range ndvAggDefs {
+			fieldSet[def.field] = true
+			for _, inner := range def.innerDefs {
+				fieldSet[inner.field] = true
+			}
+		}
+		uniqueFields := make([]string, 0, len(fieldSet))
+		for f := range fieldSet {
+			uniqueFields = append(uniqueFields, f)
+		}
+
+		totalHits, ndvData, err := diagonShard.SearchAndReadNumericValues(queryBytes, maxPerBucket, uniqueFields)
+		if err == nil && ndvData != nil {
+			return computeSubAggsFromNDV(ndvAggDefs, ndvData, totalHits)
+		}
+		logger.Debug("NumericDocValues path failed, falling back to stored fields",
+			zap.Error(err))
+	}
+
+	// Slow path: stored field extraction
+	aggFields := extractAggregationFields(subAggsMap)
 	totalHits, aggDocs, err := diagonShard.SearchAndAggregate(queryBytes, maxPerBucket, aggFields)
 	if err != nil {
 		logger.Debug("Range bucket sub-agg search failed", zap.Error(err))
@@ -1559,6 +1587,374 @@ func computeRangeBucketSubAggs(diagonShard *diagon.Shard, rangeField string, fro
 
 	return computeAggregationsFromDocValues(aggDocs, subAggsMap)
 }
+
+// ndvAggDef describes a sub-aggregation that can be computed from NumericDocValues.
+type ndvAggDef struct {
+	name      string                 // agg name (e.g., "tsum", "date")
+	aggType   string                 // "sum", "min", "max", "avg", "stats", "value_count", "date_histogram", "auto_date_histogram"
+	field     string                 // numeric field name
+	body      map[string]interface{} // original agg body (for histogram params)
+	innerDefs []ndvAggDef            // nested metric sub-aggs (only for date_histogram/auto_date_histogram)
+}
+
+// extractNDVAggDefs returns agg definitions if ALL sub-aggs can use NumericDocValues.
+// Supports: numeric metrics + date_histogram + auto_date_histogram (all stored as doubles).
+// date_histogram/auto_date_histogram may have nested metric sub-aggs (1 level deep).
+// Returns nil if any sub-agg requires string fields (terms, cardinality, etc.) — triggers fallback.
+func extractNDVAggDefs(subAggsMap map[string]interface{}) []ndvAggDef {
+	var defs []ndvAggDef
+	for name, aggDef := range subAggsMap {
+		aggDefMap, ok := aggDef.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+
+		// Extract nested sub-aggs if present
+		var innerSubAggs map[string]interface{}
+		if sub, ok := aggDefMap["aggs"]; ok {
+			innerSubAggs, _ = sub.(map[string]interface{})
+		}
+
+		for aggType, aggBody := range aggDefMap {
+			if aggType == "aggs" {
+				continue
+			}
+			bodyMap, ok := aggBody.(map[string]interface{})
+			if !ok {
+				return nil
+			}
+			field, _ := bodyMap["field"].(string)
+			if field == "" {
+				return nil
+			}
+			switch aggType {
+			case "sum", "min", "max", "avg", "stats", "value_count", "extended_stats":
+				if innerSubAggs != nil {
+					return nil // metrics can't have sub-aggs
+				}
+				defs = append(defs, ndvAggDef{name: name, aggType: aggType, field: field, body: bodyMap})
+			case "date_histogram", "auto_date_histogram":
+				var innerDefs []ndvAggDef
+				if innerSubAggs != nil {
+					// Only allow pure metric sub-aggs inside histogram
+					innerDefs = extractNDVMetricDefs(innerSubAggs)
+					if innerDefs == nil {
+						return nil // unsupported nested agg type
+					}
+				}
+				defs = append(defs, ndvAggDef{name: name, aggType: aggType, field: field, body: bodyMap, innerDefs: innerDefs})
+			default:
+				return nil // unsupported agg type for NDV path
+			}
+		}
+	}
+	if len(defs) == 0 {
+		return nil
+	}
+	return defs
+}
+
+// extractNDVMetricDefs extracts pure metric agg definitions from a sub-agg map.
+// Returns nil if any agg is not a pure numeric metric.
+func extractNDVMetricDefs(subAggsMap map[string]interface{}) []ndvAggDef {
+	var defs []ndvAggDef
+	for name, aggDef := range subAggsMap {
+		aggDefMap, ok := aggDef.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		for aggType, aggBody := range aggDefMap {
+			bodyMap, ok := aggBody.(map[string]interface{})
+			if !ok {
+				return nil
+			}
+			field, _ := bodyMap["field"].(string)
+			if field == "" {
+				return nil
+			}
+			switch aggType {
+			case "sum", "min", "max", "avg", "stats", "value_count", "extended_stats":
+				defs = append(defs, ndvAggDef{name: name, aggType: aggType, field: field, body: bodyMap})
+			default:
+				return nil
+			}
+		}
+	}
+	if len(defs) == 0 {
+		return nil
+	}
+	return defs
+}
+
+// computeSubAggsFromNDV computes sub-aggregation results from NumericDocValues arrays.
+func computeSubAggsFromNDV(defs []ndvAggDef, ndvData map[string][]diagon.NumericDocValue, totalHits int64) map[string]*pb.AggregationResult {
+	results := make(map[string]*pb.AggregationResult, len(defs))
+	for _, def := range defs {
+		vals, ok := ndvData[def.field]
+		if !ok {
+			continue
+		}
+		switch def.aggType {
+		case "sum", "min", "max", "avg", "stats", "extended_stats", "value_count":
+			results[def.name] = computeMetricFromNDV(def.aggType, vals)
+		case "date_histogram":
+			results[def.name] = computeDateHistogramWithMetricsFromNDV(vals, def.body, def.innerDefs, ndvData)
+		case "auto_date_histogram":
+			results[def.name] = computeAutoDateHistogramWithMetricsFromNDV(vals, def.body, def.innerDefs, ndvData)
+		}
+	}
+	return results
+}
+
+// computeMetricFromNDV computes a single metric aggregation from NumericDocValues array.
+func computeMetricFromNDV(aggType string, vals []diagon.NumericDocValue) *pb.AggregationResult {
+	sum := 0.0
+	minVal := math.Inf(1)
+	maxVal := math.Inf(-1)
+	count := int64(0)
+
+	for _, v := range vals {
+		if !v.Valid {
+			continue
+		}
+		sum += v.Value
+		if v.Value < minVal {
+			minVal = v.Value
+		}
+		if v.Value > maxVal {
+			maxVal = v.Value
+		}
+		count++
+	}
+
+	if count == 0 {
+		minVal = 0
+		maxVal = 0
+	}
+	avg := 0.0
+	if count > 0 {
+		avg = sum / float64(count)
+	}
+
+	switch aggType {
+	case "avg":
+		return &pb.AggregationResult{Type: "avg", Avg: avg, Count: count, Sum: sum}
+	case "sum":
+		return &pb.AggregationResult{Type: "sum", Sum: sum}
+	case "min":
+		return &pb.AggregationResult{Type: "min", Min: minVal}
+	case "max":
+		return &pb.AggregationResult{Type: "max", Max: maxVal}
+	case "stats", "extended_stats":
+		return &pb.AggregationResult{Type: aggType, Count: count, Min: minVal, Max: maxVal, Avg: avg, Sum: sum}
+	case "value_count":
+		return &pb.AggregationResult{Type: "value_count", Count: count}
+	default:
+		return nil
+	}
+}
+
+// computeAutoDateHistogramWithMetricsFromNDV computes auto_date_histogram from NumericDocValues (epoch ms),
+// with optional per-bucket metric sub-aggs computed from additional NDV arrays.
+func computeAutoDateHistogramWithMetricsFromNDV(vals []diagon.NumericDocValue, body map[string]interface{}, innerDefs []ndvAggDef, ndvData map[string][]diagon.NumericDocValue) *pb.AggregationResult {
+	targetBuckets := 10
+	if b, ok := body["buckets"].(float64); ok {
+		targetBuckets = int(b)
+	}
+	if targetBuckets <= 0 {
+		targetBuckets = 10
+	}
+
+	// Find min/max timestamps
+	minTs := math.Inf(1)
+	maxTs := math.Inf(-1)
+	validCount := 0
+	for _, v := range vals {
+		if !v.Valid {
+			continue
+		}
+		if v.Value < minTs {
+			minTs = v.Value
+		}
+		if v.Value > maxTs {
+			maxTs = v.Value
+		}
+		validCount++
+	}
+	if validCount == 0 {
+		return &pb.AggregationResult{Type: "auto_date_histogram"}
+	}
+
+	// Choose interval to get ~targetBuckets buckets
+	rangeMs := maxTs - minTs
+	if rangeMs <= 0 {
+		rangeMs = 1
+	}
+	intervalMs := rangeMs / float64(targetBuckets)
+
+	// Snap to standard intervals (second, minute, hour, day, week, month)
+	standardIntervals := []float64{
+		1000, 5000, 10000, 30000, 60000, 300000, 600000, 1800000,
+		3600000, 10800000, 43200000, 86400000, 604800000, 2592000000, 31536000000,
+	}
+	for _, si := range standardIntervals {
+		if si >= intervalMs {
+			intervalMs = si
+			break
+		}
+	}
+
+	// Bucket the values, tracking doc indices per bucket for inner metrics
+	bucketCounts := make(map[float64]int64)
+	var bucketDocIndices map[float64][]int
+	if len(innerDefs) > 0 {
+		bucketDocIndices = make(map[float64][]int)
+	}
+	for i, v := range vals {
+		if !v.Valid {
+			continue
+		}
+		bucketKey := math.Floor((v.Value-minTs)/intervalMs)*intervalMs + minTs
+		bucketCounts[bucketKey]++
+		if bucketDocIndices != nil {
+			bucketDocIndices[bucketKey] = append(bucketDocIndices[bucketKey], i)
+		}
+	}
+
+	// Sort bucket keys
+	keys := make([]float64, 0, len(bucketCounts))
+	for k := range bucketCounts {
+		keys = append(keys, k)
+	}
+	sort.Float64s(keys)
+
+	buckets := make([]*pb.AggregationBucket, len(keys))
+	for i, k := range keys {
+		buckets[i] = &pb.AggregationBucket{
+			Key:        fmt.Sprintf("%.0f", k),
+			NumericKey: k,
+			DocCount:   bucketCounts[k],
+		}
+		if len(innerDefs) > 0 {
+			buckets[i].SubAggregations = computeInnerMetricsForBucket(innerDefs, ndvData, bucketDocIndices[k])
+		}
+	}
+
+	return &pb.AggregationResult{
+		Type:    "auto_date_histogram",
+		Buckets: buckets,
+	}
+}
+
+// computeDateHistogramWithMetricsFromNDV computes date_histogram from NumericDocValues (epoch ms),
+// with optional per-bucket metric sub-aggs computed from additional NDV arrays.
+func computeDateHistogramWithMetricsFromNDV(vals []diagon.NumericDocValue, body map[string]interface{}, innerDefs []ndvAggDef, ndvData map[string][]diagon.NumericDocValue) *pb.AggregationResult {
+	// Parse interval
+	intervalMs := 3600000.0 // default 1h
+	if interval, ok := body["interval"].(string); ok {
+		intervalMs = parseIntervalToMs(interval)
+	}
+	if interval, ok := body["calendar_interval"].(string); ok {
+		intervalMs = parseIntervalToMs(interval)
+	}
+	if interval, ok := body["fixed_interval"].(string); ok {
+		intervalMs = parseIntervalToMs(interval)
+	}
+
+	// Bucket the values, tracking doc indices per bucket for inner metrics
+	bucketCounts := make(map[float64]int64)
+	var bucketDocIndices map[float64][]int
+	if len(innerDefs) > 0 {
+		bucketDocIndices = make(map[float64][]int)
+	}
+	for i, v := range vals {
+		if !v.Valid {
+			continue
+		}
+		bucketKey := math.Floor(v.Value/intervalMs) * intervalMs
+		bucketCounts[bucketKey]++
+		if bucketDocIndices != nil {
+			bucketDocIndices[bucketKey] = append(bucketDocIndices[bucketKey], i)
+		}
+	}
+
+	// Sort bucket keys
+	keys := make([]float64, 0, len(bucketCounts))
+	for k := range bucketCounts {
+		keys = append(keys, k)
+	}
+	sort.Float64s(keys)
+
+	buckets := make([]*pb.AggregationBucket, len(keys))
+	for i, k := range keys {
+		buckets[i] = &pb.AggregationBucket{
+			Key:        fmt.Sprintf("%.0f", k),
+			NumericKey: k,
+			DocCount:   bucketCounts[k],
+		}
+		if len(innerDefs) > 0 {
+			buckets[i].SubAggregations = computeInnerMetricsForBucket(innerDefs, ndvData, bucketDocIndices[k])
+		}
+	}
+
+	return &pb.AggregationResult{
+		Type:    "date_histogram",
+		Buckets: buckets,
+	}
+}
+
+// computeInnerMetricsForBucket computes metric sub-aggs for a specific set of doc indices.
+func computeInnerMetricsForBucket(innerDefs []ndvAggDef, ndvData map[string][]diagon.NumericDocValue, docIndices []int) map[string]*pb.AggregationResult {
+	results := make(map[string]*pb.AggregationResult, len(innerDefs))
+	for _, def := range innerDefs {
+		fieldVals, ok := ndvData[def.field]
+		if !ok {
+			continue
+		}
+		// Compute metric over the subset of docs
+		sum := 0.0
+		minVal := math.Inf(1)
+		maxVal := math.Inf(-1)
+		count := int64(0)
+		for _, idx := range docIndices {
+			if idx < len(fieldVals) && fieldVals[idx].Valid {
+				v := fieldVals[idx].Value
+				sum += v
+				if v < minVal {
+					minVal = v
+				}
+				if v > maxVal {
+					maxVal = v
+				}
+				count++
+			}
+		}
+		if count == 0 {
+			minVal = 0
+			maxVal = 0
+		}
+		avg := 0.0
+		if count > 0 {
+			avg = sum / float64(count)
+		}
+		switch def.aggType {
+		case "avg":
+			results[def.name] = &pb.AggregationResult{Type: "avg", Avg: avg, Count: count, Sum: sum}
+		case "sum":
+			results[def.name] = &pb.AggregationResult{Type: "sum", Sum: sum}
+		case "min":
+			results[def.name] = &pb.AggregationResult{Type: "min", Min: minVal}
+		case "max":
+			results[def.name] = &pb.AggregationResult{Type: "max", Max: maxVal}
+		case "stats", "extended_stats":
+			results[def.name] = &pb.AggregationResult{Type: def.aggType, Count: count, Min: minVal, Max: maxVal, Avg: avg, Sum: sum}
+		case "value_count":
+			results[def.name] = &pb.AggregationResult{Type: "value_count", Count: count}
+		}
+	}
+	return results
+}
+
 
 // formatRangeKey formats a numeric range key in OpenSearch-compatible format.
 // Integers display as "200.0", floats as-is.

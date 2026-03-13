@@ -810,6 +810,19 @@ func (s *Shard) Search(ctx context.Context, query []byte, maxResults int, sort [
 	return result, nil
 }
 
+// Count returns exact count of matching documents using C++ IndexSearcher::count().
+func (s *Shard) Count(ctx context.Context, query []byte) (int64, error) {
+	s.mu.RLock()
+	if s.State != ShardStateStarted {
+		s.mu.RUnlock()
+		return 0, fmt.Errorf("shard is not ready")
+	}
+	diagonShard := s.DiagonShard
+	s.mu.RUnlock()
+
+	return diagonShard.Count(query)
+}
+
 // GetDocument retrieves a document by ID
 func (s *Shard) GetDocument(ctx context.Context, docID string) (map[string]interface{}, error) {
 	s.mu.RLock()

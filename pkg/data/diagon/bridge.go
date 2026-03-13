@@ -461,8 +461,185 @@ static int batch_scan_field_values_from(
     return valid_docs;
 }
 
+// batch_scan_multi_fields_v2 extracts multiple fields from sequential docs in a SINGLE pass.
+// Reads each stored document ONCE and extracts all requested fields, eliminating repeated
+// stored field decompression. For 3 fields this is ~3x faster than 3 separate single-field scans.
+// field_names_delimited: newline-separated field names (e.g. "cloud.region\nhost.name\n@timestamp").
+// Using newline delimiter avoids embedded-null issues with CGO string passing.
+// Output layout: values concatenated in out_buf with null separators.
+// out_lengths[doc_idx * num_fields + field_idx] = length of field value for that doc.
+// Returns number of valid documents scanned.
+static int batch_scan_multi_fields_v2(
+    DiagonIndexReader reader,
+    const char* field_names_delimited,
+    int num_fields,
+    char* out_buf,
+    int buf_size,
+    int* out_lengths,
+    int max_docs,
+    int start_doc_id,
+    int* next_doc_id)
+{
+    int max_doc_id = (int)diagon_reader_max_doc(reader);
+    if (max_doc_id <= 0 || num_fields <= 0 || num_fields > 32) {
+        *next_doc_id = -1;
+        return 0;
+    }
+
+    // Parse newline-separated field names into separate C strings
+    const char* field_ptrs[32];
+    char field_copy[4096];
+    strncpy(field_copy, field_names_delimited, sizeof(field_copy) - 1);
+    field_copy[sizeof(field_copy) - 1] = '\0';
+
+    int f = 0;
+    char* tok = field_copy;
+    for (char* p = field_copy; *p && f < num_fields; p++) {
+        if (*p == '\n') {
+            *p = '\0';
+            field_ptrs[f++] = tok;
+            tok = p + 1;
+        }
+    }
+    if (f < num_fields && *tok) {
+        field_ptrs[f++] = tok;
+    }
+    if (f != num_fields) {
+        *next_doc_id = -1;
+        return 0;
+    }
+
+    int offset = 0;
+    char tmp[4096];
+    int valid_docs = 0;
+    int doc_id;
+
+    for (doc_id = start_doc_id; doc_id < max_doc_id && valid_docs < max_docs; doc_id++) {
+        DiagonDocument doc = diagon_reader_get_document(reader, doc_id);
+        if (!doc) continue;
+
+        for (int fi = 0; fi < num_fields; fi++) {
+            int idx = valid_docs * num_fields + fi;
+            out_lengths[idx] = 0;
+            if (diagon_document_get_field_value(doc, field_ptrs[fi], tmp, sizeof(tmp))) {
+                int len = (int)strlen(tmp);
+                if (offset + len + 1 <= buf_size) {
+                    memcpy(out_buf + offset, tmp, len + 1);
+                    out_lengths[idx] = len;
+                    offset += len + 1;
+                }
+            }
+        }
+
+        diagon_free_document(doc);
+        valid_docs++;
+    }
+
+    *next_doc_id = (doc_id < max_doc_id) ? doc_id : -1;
+    return valid_docs;
+}
+
 // (batch_scan_numeric_values removed: stored-field scan is O(N*7µs) = ~800s for 116M docs,
 // making it slower than the C++ range query path which uses NumericDocValues column store)
+
+// ---------- NumericDocValues aggregation ----------
+
+// search_and_read_ndv: search + extract raw NumericDocValues for matching docs.
+// Returns arrays of double values that the caller can use to compute arbitrary aggs
+// (date histograms, metrics, etc.). More flexible than search_and_compute_metrics.
+// field_names_delimited: newline-separated field names (max 16).
+// out_values: pre-allocated double[max_results * num_fields], row-major
+//   (doc0_field0, doc0_field1, ..., doc1_field0, doc1_field1, ...)
+// out_valid: pre-allocated int[max_results * num_fields], 1 if value found.
+// out_total_hits: total matching docs from query.
+// Returns number of docs processed, or -1 on error.
+static int search_and_read_ndv(
+    DiagonIndexSearcher searcher,
+    DiagonQuery query,
+    DiagonIndexReader reader,
+    const char* field_names_delimited,
+    int num_fields,
+    int max_results,
+    double* out_values,
+    int* out_valid,
+    int64_t* out_total_hits)
+{
+    if (!searcher || !query || !reader || !field_names_delimited) return -1;
+    if (num_fields <= 0 || num_fields > 16) return -1;
+
+    // Parse field names
+    const char* field_ptrs[16];
+    char field_copy[4096];
+    strncpy(field_copy, field_names_delimited, sizeof(field_copy) - 1);
+    field_copy[sizeof(field_copy) - 1] = '\0';
+
+    int f = 0;
+    char* tok = field_copy;
+    for (char* p = field_copy; *p && f < num_fields; p++) {
+        if (*p == '\n') {
+            *p = '\0';
+            field_ptrs[f++] = tok;
+            tok = p + 1;
+        }
+    }
+    if (f < num_fields && *tok) field_ptrs[f++] = tok;
+    if (f != num_fields) return -1;
+
+    // Execute search
+    DiagonTopDocs td = diagon_search(searcher, query, max_results);
+    if (!td) return -1;
+
+    *out_total_hits = diagon_top_docs_total_hits(td);
+    int num_docs = diagon_top_docs_score_docs_length(td);
+
+    if (num_docs == 0) {
+        diagon_free_top_docs(td);
+        return 0;
+    }
+
+    // Extract doc IDs
+    int* doc_ids = (int*)malloc(num_docs * sizeof(int));
+    if (!doc_ids) { diagon_free_top_docs(td); return -1; }
+    for (int i = 0; i < num_docs; i++) {
+        DiagonScoreDoc sd = diagon_top_docs_score_doc_at(td, i);
+        doc_ids[i] = sd ? diagon_score_doc_get_doc(sd) : -1;
+    }
+    diagon_free_top_docs(td);
+
+    // Initialize output
+    memset(out_valid, 0, num_docs * num_fields * sizeof(int));
+
+    // For each field: bulk-read NumericDocValues
+    // Use temporary buffers for bulk read, then scatter into row-major output
+    double* tmp_values = (double*)malloc(num_docs * sizeof(double));
+    int* tmp_found = (int*)malloc(num_docs * sizeof(int));
+    if (!tmp_values || !tmp_found) {
+        free(doc_ids); free(tmp_values); free(tmp_found);
+        return -1;
+    }
+
+    for (int fi = 0; fi < num_fields; fi++) {
+        memset(tmp_found, 0, num_docs * sizeof(int));
+
+        diagon_reader_get_numeric_doc_values_bulk(
+            reader, field_ptrs[fi],
+            doc_ids, num_docs,
+            tmp_values, tmp_found);
+
+        // Scatter into row-major output
+        for (int i = 0; i < num_docs; i++) {
+            int idx = i * num_fields + fi;
+            out_values[idx] = tmp_values[i];
+            out_valid[idx] = tmp_found[i];
+        }
+    }
+
+    free(doc_ids);
+    free(tmp_values);
+    free(tmp_found);
+
+    return num_docs;
+}
 
 // ---------- BKD-based aggregation functions ----------
 // Range agg uses individual BKD range queries (few buckets: 3-10 typical).
@@ -870,9 +1047,10 @@ type Shard struct {
 	// After the first batch extraction, subsequent agg queries on the same
 	// fields skip CGO entirely and operate on pure Go arrays.
 	// Invalidated on commit/refresh (readerDirty).
-	columnCache   map[string][]string // field -> values for docs 0..N
-	columnCacheMu sync.RWMutex
-	columnCacheN  int // number of docs in cache (all columns same length)
+	columnCache      map[string][]string // field -> values for docs 0..N
+	columnCacheMu    sync.RWMutex
+	columnCacheN     int // number of docs in cache (all columns same length)
+	columnCacheMaxDoc int // maxDocID when cache was built (for incremental updates)
 
 	// knownStoredFields tracks field names that have been stored in the index.
 	// Used to reconstruct _source for docs indexed before _source storage was added.
@@ -3233,6 +3411,98 @@ func (s *Shard) SearchAndAggregate(query []byte, maxResults int, fields []string
 	return totalHits, docs, nil
 }
 
+// NumericDocValue holds a raw double value and validity flag.
+type NumericDocValue struct {
+	Value float64
+	Valid bool
+}
+
+// SearchAndReadNumericValues executes a query and reads NumericDocValues for matching docs.
+// Returns per-field arrays of numeric values (O(1) columnar) instead of stored field strings.
+// Caller can compute any aggregation from the raw values (metrics, histograms, etc.).
+func (s *Shard) SearchAndReadNumericValues(query []byte, maxResults int, fields []string) (int64, map[string][]NumericDocValue, error) {
+	if len(fields) == 0 {
+		return 0, nil, nil
+	}
+
+	// Ensure reader/searcher are open
+	s.mu.RLock()
+	needReopen := s.readerDirty || s.reader == nil
+	s.mu.RUnlock()
+
+	if needReopen {
+		s.mu.Lock()
+		needReopen = s.readerDirty || s.reader == nil
+		if needReopen {
+			if s.readerDirty && s.writer != nil {
+				C.diagon_commit(s.writer)
+			}
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+				s.reader = nil
+			}
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader != nil {
+				s.searcher = C.diagon_create_index_searcher(s.reader)
+			}
+			s.readerDirty = false
+		}
+		s.mu.Unlock()
+	}
+
+	// Parse and convert query
+	var queryObj map[string]interface{}
+	if err := json.Unmarshal(query, &queryObj); err != nil {
+		return 0, nil, fmt.Errorf("failed to parse query: %w", err)
+	}
+	diagonQuery, err := s.convertQueryToDiagon(queryObj)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer C.diagon_free_query(diagonQuery)
+
+	numFields := len(fields)
+	fieldNamesStr := strings.Join(fields, "\n")
+	cFieldNames := C.CString(fieldNamesStr)
+	defer C.free(unsafe.Pointer(cFieldNames))
+
+	// Allocate output: row-major double[maxResults * numFields]
+	outValues := make([]C.double, maxResults*numFields)
+	outValid := make([]C.int, maxResults*numFields)
+	var totalHits C.int64_t
+
+	s.mu.RLock()
+	n := int(C.search_and_read_ndv(
+		s.searcher, diagonQuery, s.reader,
+		cFieldNames, C.int(numFields), C.int(maxResults),
+		&outValues[0], &outValid[0], &totalHits))
+	s.mu.RUnlock()
+
+	if n < 0 {
+		return 0, nil, fmt.Errorf("search_and_read_ndv failed")
+	}
+
+	// Scatter into per-field arrays
+	result := make(map[string][]NumericDocValue, numFields)
+	for fi, field := range fields {
+		vals := make([]NumericDocValue, n)
+		for i := 0; i < n; i++ {
+			idx := i*numFields + fi
+			vals[i] = NumericDocValue{
+				Value: float64(outValues[idx]),
+				Valid: outValid[idx] != 0,
+			}
+		}
+		result[field] = vals
+	}
+
+	return int64(totalHits), result, nil
+}
+
 // DirectAggScan iterates documents by internal doc ID and extracts field values
 // for aggregation. Uses batch C extraction (1 CGO call per field instead of
 // 3 CGO calls per doc per field) and an in-memory column cache to avoid
@@ -3411,9 +3681,10 @@ func (s *Shard) DirectAggScan(fields []string, maxDocs int) (int64, []AggDocValu
 
 // DirectAggColumns returns raw column data (map[field][]string) and total doc count
 // for computing aggregations directly without building per-doc AggDocValues structs.
-// This reduces memory from ~90GB (AggDocValues for 116M docs) to ~3GB (column cache).
+// Uses single-pass multi-field extraction: reads each doc ONCE for all fields (~3x faster
+// than sequential per-field scans for 3-field composite aggs).
 func (s *Shard) DirectAggColumns(fields []string) (int64, map[string][]string, int, error) {
-	// Ensure reader is open (same as DirectAggScan)
+	// Ensure reader is open
 	s.mu.RLock()
 	needReopen := s.readerDirty || s.reader == nil
 	s.mu.RUnlock()
@@ -3438,9 +3709,11 @@ func (s *Shard) DirectAggColumns(fields []string) (int64, map[string][]string, i
 				s.searcher = C.diagon_create_index_searcher(s.reader)
 			}
 			s.readerDirty = false
+			// Invalidate column cache — doc IDs may change after merge/reopen
 			s.columnCacheMu.Lock()
 			s.columnCache = nil
 			s.columnCacheN = 0
+			s.columnCacheMaxDoc = 0
 			s.columnCacheMu.Unlock()
 		}
 		s.mu.Unlock()
@@ -3459,7 +3732,7 @@ func (s *Shard) DirectAggColumns(fields []string) (int64, map[string][]string, i
 		return totalDocs, nil, 0, nil
 	}
 
-	// Check column cache
+	// Check column cache — return immediately if all fields cached
 	s.columnCacheMu.RLock()
 	allCached := s.columnCache != nil && s.columnCacheN > 0
 	if allCached {
@@ -3481,45 +3754,9 @@ func (s *Shard) DirectAggColumns(fields []string) (int64, map[string][]string, i
 	}
 	s.columnCacheMu.RUnlock()
 
-	// Chunked batch extraction (same as DirectAggScan)
-	const chunkSize = 500000
-	chunkBufSize := chunkSize * 128
-
-	columnData := make(map[string][]string, len(fields))
-	for _, f := range fields {
-		columnData[f] = make([]string, 0, maxDocID)
-	}
-
-	s.mu.RLock()
-	for _, field := range fields {
-		buf := make([]byte, chunkBufSize)
-		lengths := make([]C.int, chunkSize)
-		cField := C.CString(field)
-		nextDocID := C.int(0)
-
-		for nextDocID >= 0 {
-			var cNextDocID C.int
-			n := int(C.batch_scan_field_values_from(
-				s.reader, cField,
-				(*C.char)(unsafe.Pointer(&buf[0])), C.int(chunkBufSize),
-				&lengths[0], C.int(chunkSize),
-				nextDocID, &cNextDocID))
-
-			offset := 0
-			for i := 0; i < n; i++ {
-				l := int(lengths[i])
-				if l > 0 && offset+l <= len(buf) {
-					columnData[field] = append(columnData[field], string(buf[offset:offset+l]))
-					offset += l + 1
-				} else {
-					columnData[field] = append(columnData[field], "")
-				}
-			}
-			nextDocID = cNextDocID
-		}
-		C.free(unsafe.Pointer(cField))
-	}
-	s.mu.RUnlock()
+	// Multi-field single-pass extraction: read each doc once, extract all fields.
+	// For 3 fields this is ~3x faster than 3 separate single-field scans.
+	columnData := s.parallelFieldScan(fields, maxDocID, 0, maxDocID)
 
 	numDocs := 0
 	for _, vals := range columnData {
@@ -3536,13 +3773,125 @@ func (s *Shard) DirectAggColumns(fields []string) (int64, map[string][]string, i
 		s.columnCache[f] = vals
 	}
 	s.columnCacheN = numDocs
+	s.columnCacheMaxDoc = maxDocID
 	s.columnCacheMu.Unlock()
 
 	return totalDocs, columnData, numDocs, nil
 }
 
+// parallelFieldScan extracts multiple fields from docs [startDocID, endDocID) in a single pass.
+// For N fields, reads each stored document ONCE instead of N times → N× faster.
+// For single field, falls back to the proven single-field C batch scanner.
+func (s *Shard) parallelFieldScan(fields []string, capacity int, startDocID int, endDocID int) map[string][]string {
+	numFields := len(fields)
+	columnData := make(map[string][]string, numFields)
+	for _, f := range fields {
+		columnData[f] = make([]string, 0, capacity)
+	}
+
+	if numFields == 0 {
+		return columnData
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if numFields == 1 {
+		// Single field: use proven single-field batch scanner
+		columnData[fields[0]] = s.singleFieldScanLocked(fields[0], capacity, startDocID, endDocID)
+		return columnData
+	}
+
+	// Multiple fields: single-pass scan using newline-delimited field names
+	fieldNamesStr := strings.Join(fields, "\n")
+	cFieldNames := C.CString(fieldNamesStr) // No embedded nulls!
+	defer C.free(unsafe.Pointer(cFieldNames))
+
+	const chunkSize = 500000
+	chunkBufSize := chunkSize * 128 * numFields
+	if chunkBufSize > 256*1024*1024 {
+		chunkBufSize = 256 * 1024 * 1024
+	}
+
+	buf := make([]byte, chunkBufSize)
+	lengths := make([]C.int, chunkSize*numFields)
+
+	nextDocID := C.int(startDocID)
+	for nextDocID >= 0 && int(nextDocID) < endDocID {
+		var cNextDocID C.int
+		n := int(C.batch_scan_multi_fields_v2(
+			s.reader,
+			cFieldNames,
+			C.int(numFields),
+			(*C.char)(unsafe.Pointer(&buf[0])), C.int(chunkBufSize),
+			&lengths[0], C.int(chunkSize),
+			nextDocID, &cNextDocID))
+
+		// Parse interleaved output: for each doc, fields are in order
+		offset := 0
+		for i := 0; i < n; i++ {
+			for f := 0; f < numFields; f++ {
+				idx := i*numFields + f
+				l := int(lengths[idx])
+				if l > 0 && offset+l <= len(buf) {
+					columnData[fields[f]] = append(columnData[fields[f]], string(buf[offset:offset+l]))
+					offset += l + 1
+				} else {
+					columnData[fields[f]] = append(columnData[fields[f]], "")
+				}
+			}
+		}
+		nextDocID = cNextDocID
+	}
+
+	return columnData
+}
+
+// singleFieldScanLocked extracts one field from docs [startDocID, endDocID) using the
+// proven batch_scan_field_values_from C function. Caller must hold s.mu.RLock().
+func (s *Shard) singleFieldScanLocked(field string, capacity int, startDocID int, endDocID int) []string {
+	const chunkSize = 500000
+	chunkBufSize := chunkSize * 128
+	if chunkBufSize > 128*1024*1024 {
+		chunkBufSize = 128 * 1024 * 1024
+	}
+
+	cField := C.CString(field)
+	defer C.free(unsafe.Pointer(cField))
+
+	buf := make([]byte, chunkBufSize)
+	lengths := make([]C.int, chunkSize)
+	vals := make([]string, 0, capacity)
+
+	nextDocID := C.int(startDocID)
+	for nextDocID >= 0 && int(nextDocID) < endDocID {
+		var cNextDocID C.int
+		n := int(C.batch_scan_field_values_from(
+			s.reader,
+			cField,
+			(*C.char)(unsafe.Pointer(&buf[0])), C.int(chunkBufSize),
+			&lengths[0], C.int(chunkSize),
+			nextDocID, &cNextDocID))
+
+		offset := 0
+		for i := 0; i < n; i++ {
+			l := int(lengths[i])
+			if l > 0 && offset+l <= len(buf) {
+				vals = append(vals, string(buf[offset:offset+l]))
+				offset += l + 1
+			} else {
+				vals = append(vals, "")
+			}
+		}
+		nextDocID = cNextDocID
+	}
+
+	return vals
+}
+
 // DirectAggColumnsSampled is like DirectAggColumns but caps the scan at maxDocs.
-// Used for composite aggs on cold cache where scanning all 116M docs is too slow.
+// Used for composite aggs on cold cache where scanning all docs is too slow.
+// Uses parallel per-field extraction for ~Nx wall-clock speedup with N fields.
 // Results are NOT stored in the column cache since they're partial.
 func (s *Shard) DirectAggColumnsSampled(fields []string, maxDocs int) (int64, map[string][]string, int, error) {
 	s.mu.RLock()
@@ -3585,59 +3934,14 @@ func (s *Shard) DirectAggColumnsSampled(fields []string, maxDocs int) (int64, ma
 		return totalDocs, nil, 0, nil
 	}
 
-	const chunkSize = 500000
-	chunkBufSize := chunkSize * 128
-
-	columnData := make(map[string][]string, len(fields))
-	for _, f := range fields {
-		cap := maxDocs
-		if cap > int(totalDocs) {
-			cap = int(totalDocs)
-		}
-		columnData[f] = make([]string, 0, cap)
-	}
-
 	// Start from the end of the index to avoid legacy docs without stored fields.
-	// Early docs (pre-stored-field era) have empty values; newer docs at the end
-	// have proper stored fields.
 	maxDocID := int(C.diagon_reader_max_doc(s.reader))
 	startDocID := maxDocID - maxDocs
 	if startDocID < 0 {
 		startDocID = 0
 	}
 
-	s.mu.RLock()
-	for _, field := range fields {
-		buf := make([]byte, chunkBufSize)
-		lengths := make([]C.int, chunkSize)
-		cField := C.CString(field)
-		nextDocID := C.int(startDocID)
-		collected := 0
-
-		for nextDocID >= 0 && collected < maxDocs {
-			var cNextDocID C.int
-			n := int(C.batch_scan_field_values_from(
-				s.reader, cField,
-				(*C.char)(unsafe.Pointer(&buf[0])), C.int(chunkBufSize),
-				&lengths[0], C.int(chunkSize),
-				nextDocID, &cNextDocID))
-
-			offset := 0
-			for i := 0; i < n && collected < maxDocs; i++ {
-				l := int(lengths[i])
-				if l > 0 && offset+l <= len(buf) {
-					columnData[field] = append(columnData[field], string(buf[offset:offset+l]))
-					offset += l + 1
-				} else {
-					columnData[field] = append(columnData[field], "")
-				}
-				collected++
-			}
-			nextDocID = cNextDocID
-		}
-		C.free(unsafe.Pointer(cField))
-	}
-	s.mu.RUnlock()
+	columnData := s.parallelFieldScan(fields, maxDocs, startDocID, maxDocID)
 
 	numDocs := 0
 	for _, vals := range columnData {
@@ -3778,7 +4082,7 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 
 	cacheKey := field + ":" + fmt.Sprintf("%d", size)
 
-	// Check cache first
+	// Check terms agg cache first
 	s.termsAggCacheMu.RLock()
 	if cached, ok := s.termsAggCache[cacheKey]; ok {
 		s.termsAggCacheMu.RUnlock()
@@ -3786,7 +4090,25 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	}
 	s.termsAggCacheMu.RUnlock()
 
-	// Fast path: check under RLock if reader is already open
+	// Fast path: compute from column cache if available (instant, no CGO)
+	s.columnCacheMu.RLock()
+	if s.columnCache != nil && s.columnCacheN > 0 {
+		if colVals, ok := s.columnCache[field]; ok {
+			s.columnCacheMu.RUnlock()
+			buckets := computeTermsFromColumn(colVals, size)
+			// Cache the result
+			s.termsAggCacheMu.Lock()
+			if s.termsAggCache == nil {
+				s.termsAggCache = make(map[string][]TermBucket)
+			}
+			s.termsAggCache[cacheKey] = buckets
+			s.termsAggCacheMu.Unlock()
+			return buckets, nil
+		}
+	}
+	s.columnCacheMu.RUnlock()
+
+	// Ensure reader is open
 	s.mu.RLock()
 	needReopen := s.reader == nil || s.readerDirty
 	s.mu.RUnlock()
@@ -3802,6 +4124,7 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 			s.columnCacheMu.Lock()
 			s.columnCache = nil
 			s.columnCacheN = 0
+			s.columnCacheMaxDoc = 0
 			s.columnCacheMu.Unlock()
 
 			if s.readerDirty && s.writer != nil {
@@ -3836,9 +4159,7 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	// Allocate output buckets
 	outBuckets := make([]C.TermBucketC, size)
 
-	// Cap scan at 50K docs. On cold disk (no OS file cache), stored field reads
-	// At warm disk speed of ~7µs/doc, 200K docs = ~1.4s.
-	// 200K samples with stride ~50 gives ~0.5% variance vs ~2% at 50K.
+	// 200K samples with stride ~50 gives ~0.5% variance.
 	const maxDocsToScan = 200000
 
 	n := C.compute_terms_agg_stored(
@@ -3856,8 +4177,6 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	buckets := make([]TermBucket, 0, int(n))
 	for i := 0; i < int(n); i++ {
 		key := C.GoString(&outBuckets[i].key[0])
-		// Sanitize non-UTF-8 strings to prevent gRPC protobuf marshaling failures.
-		// Stored field values may contain arbitrary bytes from the C++ engine.
 		if !utf8.ValidString(key) {
 			continue
 		}
@@ -3876,6 +4195,45 @@ func (s *Shard) ComputeTermsAgg(field string, size int) ([]TermBucket, error) {
 	s.termsAggCacheMu.Unlock()
 
 	return buckets, nil
+}
+
+// computeTermsFromColumn computes terms aggregation from cached column data (pure Go, no CGO).
+// Uses exact counts from the full column rather than sampled estimates.
+func computeTermsFromColumn(values []string, size int) []TermBucket {
+	counts := make(map[string]int64, 256)
+	for _, v := range values {
+		if v != "" {
+			counts[v]++
+		}
+	}
+	// Sort by count descending, collect top-size
+	type kv struct {
+		key   string
+		count int64
+	}
+	sorted := make([]kv, 0, len(counts))
+	for k, c := range counts {
+		sorted = append(sorted, kv{k, c})
+	}
+	// Simple selection sort for small size (typically 10-500)
+	for i := 0; i < len(sorted) && i < size; i++ {
+		maxIdx := i
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].count > sorted[maxIdx].count {
+				maxIdx = j
+			}
+		}
+		sorted[i], sorted[maxIdx] = sorted[maxIdx], sorted[i]
+	}
+	n := len(sorted)
+	if n > size {
+		n = size
+	}
+	buckets := make([]TermBucket, n)
+	for i := 0; i < n; i++ {
+		buckets[i] = TermBucket{Key: sorted[i].key, DocCount: sorted[i].count}
+	}
+	return buckets
 }
 
 // ComputeCardinality returns the approximate number of unique values for a field.

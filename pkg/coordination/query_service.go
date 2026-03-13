@@ -272,6 +272,19 @@ func (qs *QueryService) ExecuteSearch(ctx context.Context, indexName string, req
 			zap.Error(err))
 	}
 
+	// Direct search fast path: bypass the planner's expression conversion which
+	// loses information for query types like query_string, bool filter, etc.
+	// Forward the raw query JSON directly to data nodes, same as _count does.
+	if len(searchReq.Aggregations) == 0 && len(searchReq.Aggs) == 0 {
+		result, err := qs.executeDirectSearch(ctx, indexName, requestBody, searchReq, startTime)
+		if err == nil {
+			return result, nil
+		}
+		qs.logger.Warn("Direct search fast path failed, falling back to planner",
+			zap.String("index", indexName),
+			zap.Error(err))
+	}
+
 	// Step 2: Get shard routing for this index
 	routing, err := qs.masterClient.GetShardRouting(ctx, indexName)
 	if err != nil {
@@ -437,6 +450,89 @@ func aggResponseCacheKey(indexName string, rawQuery []byte) string {
 	h.Write([]byte(indexName))
 	h.Write(rawQuery)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// executeDirectSearch bypasses the planner and sends raw query JSON directly to
+// data nodes. The planner's expression conversion loses information for certain
+// query types (query_string, bool filter, must_not combos). This path mirrors
+// how _count works — raw JSON goes straight to the data node's Diagon bridge.
+func (qs *QueryService) executeDirectSearch(ctx context.Context, indexName string, rawBody []byte, searchReq *parser.SearchRequest, startTime time.Time) (*SearchResult, error) {
+	qs.logger.Debug("Direct search fast path: bypassing planner",
+		zap.String("index", indexName))
+
+	// Extract just the query portion from the request body
+	var bodyMap map[string]json.RawMessage
+	if err := json.Unmarshal(rawBody, &bodyMap); err != nil {
+		return nil, fmt.Errorf("failed to parse request body: %w", err)
+	}
+
+	queryBytes, hasQuery := bodyMap["query"]
+	if !hasQuery {
+		// No explicit query → match_all
+		queryBytes = []byte(`{"match_all":{}}`)
+	}
+
+	// Extract sort if present
+	var sort []string
+	if sortRaw, ok := bodyMap["sort"]; ok {
+		var sortArr []interface{}
+		if err := json.Unmarshal(sortRaw, &sortArr); err == nil {
+			for _, s := range sortArr {
+				switch v := s.(type) {
+				case string:
+					sort = append(sort, v)
+				case map[string]interface{}:
+					for field, opts := range v {
+						if optsMap, ok := opts.(map[string]interface{}); ok {
+							if order, ok := optsMap["order"].(string); ok {
+								sort = append(sort, field+":"+order)
+							} else {
+								sort = append(sort, field)
+							}
+						} else {
+							sort = append(sort, field)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	size := searchReq.Size
+	from := searchReq.From
+
+	// Execute via QueryExecutor — fans out to all data node shards
+	execResult, err := qs.queryExecutor.ExecuteSearch(ctx, indexName, queryBytes, nil, from, size, sort)
+	if err != nil {
+		return nil, err
+	}
+
+	totalTime := time.Since(startTime)
+	result := &SearchResult{
+		TookMillis:   totalTime.Milliseconds(),
+		TotalHits:    execResult.TotalHits,
+		MaxScore:     execResult.MaxScore,
+		Hits:         make([]*SearchHit, len(execResult.Hits)),
+		Aggregations: make(map[string]*AggregationResult),
+		Shards:       &ShardInfo{Total: 1, Successful: 1},
+	}
+
+	for i, hit := range execResult.Hits {
+		result.Hits[i] = &SearchHit{
+			ID:         hit.ID,
+			Score:      hit.Score,
+			Source:     hit.Source,
+			SortValues: hit.SortValues,
+		}
+	}
+
+	qs.logger.Info("Direct search fast path succeeded",
+		zap.String("index", indexName),
+		zap.Int64("total_hits", execResult.TotalHits),
+		zap.Int("hits", len(result.Hits)),
+		zap.Duration("total_time", totalTime))
+
+	return result, nil
 }
 
 // executeAggFastPath bypasses the planner and sends raw query JSON directly to

@@ -202,7 +202,7 @@ func (qe *QueryExecutor) mergeBucketAggregation(aggs []*pb.AggregationResult) *A
 	bucketMap := make(map[string]*bucketData)         // for string keys (terms)
 	numericBucketMap := make(map[float64]*bucketData) // for numeric keys (histogram, date_histogram)
 
-	isNumeric := aggType == "histogram" || aggType == "date_histogram"
+	isNumeric := aggType == "histogram" || aggType == "date_histogram" || aggType == "auto_date_histogram"
 
 	for _, agg := range aggs {
 		for _, bucket := range agg.Buckets {
@@ -309,7 +309,7 @@ func (qe *QueryExecutor) mergeSubAggregations(subAggsByName map[string][]*pb.Agg
 		subType := subAggs[0].Type
 		var result *AggregationResult
 		switch subType {
-		case "terms", "histogram", "date_histogram", "range", "filters":
+		case "terms", "histogram", "date_histogram", "auto_date_histogram", "range", "filters":
 			result = qe.mergeBucketAggregation(subAggs)
 		case "stats":
 			result = qe.mergeStatsAggregation(subAggs, false)
