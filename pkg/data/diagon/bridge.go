@@ -2024,12 +2024,78 @@ func (s *Shard) convertQueryToDiagon(queryObj map[string]interface{}) (C.DiagonQ
 			s.logger.Debug(" Diagon BKD point range query created successfully")
 			break // Only support single field for now
 		}
+	} else if qsQuery, ok := queryObj["query_string"].(map[string]interface{}); ok {
+		// Query string query: {"query_string": {"query": "field: terms", "default_field": "message"}}
+		queryText, _ := qsQuery["query"].(string)
+		defaultField, _ := qsQuery["default_field"].(string)
+		if defaultField == "" {
+			defaultField = "message"
+		}
+
+		// Extract "field: terms" pattern
+		field := defaultField
+		text := queryText
+		if idx := strings.Index(queryText, ":"); idx > 0 {
+			candidate := strings.TrimSpace(queryText[:idx])
+			if !strings.Contains(candidate, " ") {
+				field = candidate
+				text = strings.TrimSpace(queryText[idx+1:])
+			}
+		}
+
+		// Tokenize and create match-style query (SHOULD of terms)
+		tokens := strings.Fields(strings.ToLower(text))
+		if len(tokens) == 0 {
+			diagonQuery = C.diagon_create_match_all_query()
+		} else if len(tokens) == 1 {
+			cField := C.CString(field)
+			defer C.free(unsafe.Pointer(cField))
+			cValue := C.CString(tokens[0])
+			defer C.free(unsafe.Pointer(cValue))
+			term := C.diagon_create_term(cField, cValue)
+			defer C.diagon_free_term(term)
+			diagonQuery = C.diagon_create_term_query(term)
+		} else {
+			cField := C.CString(field)
+			defer C.free(unsafe.Pointer(cField))
+			boolQ := C.diagon_create_bool_query()
+			for _, tok := range tokens {
+				cTok := C.CString(tok)
+				term := C.diagon_create_term(cField, cTok)
+				tq := C.diagon_create_term_query(term)
+				C.free(unsafe.Pointer(cTok))
+				C.diagon_free_term(term)
+				if tq == nil {
+					continue
+				}
+				C.diagon_bool_query_add_should(boolQ, tq)
+			}
+			C.diagon_bool_query_set_minimum_should_match(boolQ, C.int(1))
+			diagonQuery = C.diagon_bool_query_build(boolQ)
+		}
+		if diagonQuery == nil {
+			errMsg := C.GoString(C.diagon_last_error())
+			return nil, fmt.Errorf("failed to create query_string query: %s", errMsg)
+		}
 	} else if boolQuery, ok := queryObj["bool"].(map[string]interface{}); ok {
 		// Bool query: {"bool": {"must": [...], "should": [...], "filter": [...], "must_not": [...]}}
 		boolQueryBuilder := C.diagon_create_bool_query()
 		if boolQueryBuilder == nil {
 			errMsg := C.GoString(C.diagon_last_error())
 			return nil, fmt.Errorf("failed to create bool query: %s", errMsg)
+		}
+
+		// If only must_not clauses exist (no must/should/filter), add implicit match_all
+		// to MUST. Without a base set, BooleanQuery returns no results for pure must_not.
+		hasMust := boolQuery["must"] != nil
+		hasShould := boolQuery["should"] != nil
+		hasFilter := boolQuery["filter"] != nil
+		hasMustNot := boolQuery["must_not"] != nil
+		if hasMustNot && !hasMust && !hasShould && !hasFilter {
+			matchAll := C.diagon_create_match_all_query()
+			if matchAll != nil {
+				C.diagon_bool_query_add_must(boolQueryBuilder, matchAll)
+			}
 		}
 
 		// Add MUST clauses
@@ -2132,13 +2198,22 @@ func (s *Shard) convertQueryToDiagon(queryObj map[string]interface{}) (C.DiagonQ
 			errMsg := C.GoString(C.diagon_last_error())
 			return nil, fmt.Errorf("failed to build bool query: %s", errMsg)
 		}
+	} else if _, ok := queryObj["exists"]; ok {
+		// exists query: match all docs with a given field.
+		// Diagon doesn't have a native FieldExistsQuery in the C API yet.
+		// Fall back to match_all (correct for fields present on all docs).
+		s.logger.Warn("exists query not natively supported, falling back to match_all")
+		diagonQuery = C.diagon_create_match_all_query()
+		if diagonQuery == nil {
+			return nil, fmt.Errorf("failed to create match_all fallback for exists query")
+		}
 	} else {
 		// Extract query type for better error message
 		queryTypes := make([]string, 0, len(queryObj))
 		for k := range queryObj {
 			queryTypes = append(queryTypes, k)
 		}
-		return nil, fmt.Errorf("unsupported query type: %v (currently supported: 'term', 'match', 'match_all', 'range', 'bool')", queryTypes)
+		return nil, fmt.Errorf("unsupported query type: %v (supported: 'term', 'match', 'match_all', 'range', 'bool', 'query_string', 'exists')", queryTypes)
 	}
 
 	return diagonQuery, nil
@@ -2168,6 +2243,77 @@ func (s *Shard) SearchWithLimit(query []byte, filterExpression []byte, maxResult
 // internal doc IDs in chronologically-indexed data).
 func (s *Shard) SearchWithSort(query []byte, filterExpression []byte, maxResults int, sort []string) (*SearchResult, error) {
 	return s.searchInternal(query, filterExpression, maxResults, nil, sort)
+}
+
+// Count returns the exact number of documents matching the query.
+// Uses C++ IndexSearcher::count() which is O(1) for TermQuery, exact for all query types.
+func (s *Shard) Count(query []byte) (int64, error) {
+	// Ensure reader is open (same reopen logic as searchInternal)
+	s.mu.RLock()
+	needReopen := s.readerDirty || s.reader == nil
+	s.mu.RUnlock()
+
+	if needReopen {
+		s.mu.Lock()
+		needReopen = s.readerDirty || s.reader == nil
+		if needReopen {
+			if s.readerDirty && s.writer != nil {
+				if !C.diagon_commit(s.writer) {
+					errMsg := C.GoString(C.diagon_last_error())
+					s.logger.Warn("Failed to commit before count", zap.String("error", errMsg))
+				}
+			}
+			if s.searcher != nil {
+				C.diagon_free_index_searcher(s.searcher)
+				s.searcher = nil
+			}
+			if s.reader != nil {
+				C.diagon_close_index_reader(s.reader)
+				s.reader = nil
+			}
+			s.reader = C.diagon_open_index_reader(s.directory)
+			if s.reader == nil {
+				s.mu.Unlock()
+				errMsg := C.GoString(C.diagon_last_error())
+				return 0, fmt.Errorf("failed to open reader: %s", errMsg)
+			}
+			s.searcher = C.diagon_create_index_searcher(s.reader)
+			if s.searcher == nil {
+				s.mu.Unlock()
+				errMsg := C.GoString(C.diagon_last_error())
+				return 0, fmt.Errorf("failed to create searcher: %s", errMsg)
+			}
+			s.readerDirty = false
+		}
+		s.mu.Unlock()
+	}
+
+	// Parse and convert query
+	var queryObj map[string]interface{}
+	if err := json.Unmarshal(query, &queryObj); err != nil {
+		return 0, fmt.Errorf("failed to parse query: %w", err)
+	}
+
+	if isMatchAllQuery(queryObj) {
+		return int64(C.diagon_reader_num_docs(s.reader)), nil
+	}
+
+	diagonQuery, err := s.convertQueryToDiagon(queryObj)
+	if err != nil {
+		return 0, err
+	}
+	defer C.diagon_free_query(diagonQuery)
+
+	s.mu.RLock()
+	count := C.diagon_count(s.searcher, diagonQuery)
+	s.mu.RUnlock()
+
+	if count < 0 {
+		errMsg := C.GoString(C.diagon_last_error())
+		return 0, fmt.Errorf("count failed: %s", errMsg)
+	}
+
+	return int64(count), nil
 }
 
 // nextDouble returns the smallest double strictly greater than v.
@@ -2706,9 +2852,20 @@ func (s *Shard) searchInternal(query []byte, filterExpression []byte, maxResults
 	}
 	defer C.diagon_free_top_docs(topDocs)
 
+	// Get exact totalHits via dedicated count API.
+	// diagon_search uses WAND early termination which returns approximate counts.
+	// diagon_count uses TotalHitCountCollector (no scoring) for exact results.
+	s.mu.RLock()
+	exactCount := int64(C.diagon_count(s.searcher, diagonQuery))
+	s.mu.RUnlock()
+
 	// Extract results
 	extractStart := time.Now()
-	totalHits := int64(C.diagon_top_docs_total_hits(topDocs))
+	totalHits := exactCount
+	if totalHits < 0 {
+		// Fallback to search-reported count if count API fails
+		totalHits = int64(C.diagon_top_docs_total_hits(topDocs))
+	}
 	maxScore := float64(C.diagon_top_docs_max_score(topDocs))
 	numResults := int(C.diagon_top_docs_score_docs_length(topDocs))
 
@@ -4375,15 +4532,10 @@ func (s *Shard) ComputeRangeAggBKD(field string, ranges []RangeSpec, filterQuery
 		return nil, nil
 	}
 
-	// Guard: Diagon's BKD sortableDoubleBits has a bug with negative values
-	// (uses & 0x7FFF... instead of | 0x8000...), causing negative doubles to
-	// sort above positive doubles. This makes range queries with negative bounds
-	// return empty results. Fall back to doc extraction path for correctness.
-	for _, r := range ranges {
-		if (r.From != nil && *r.From < 0) || (r.To != nil && *r.To < 0) {
-			return nil, fmt.Errorf("BKD range query does not support negative bounds (sortableDoubleBits bug)")
-		}
-	}
+	// Note: Diagon's BKD sortableDoubleBits uses & 0x7FFF... instead of | 0x8000...,
+	// which makes cross-sign byte comparisons fail. The C function compute_range_agg_bkd
+	// works around this by splitting cross-sign ranges at zero. Same-sign ranges
+	// (pure negative or pure positive) work correctly with BKD byte ordering.
 
 	var filterQ C.DiagonQuery
 	if filterQuery != nil {
