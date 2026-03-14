@@ -231,12 +231,13 @@ curl -X GET "http://localhost:9200/products/_search" \
 
 ### Performance Characteristics
 
-**Query Latency**:
-- <50ms for 100K documents (4 DataNodes)
-- Parallel execution: Total time ≈ slowest shard
+**Query Latency** (measured on 116M docs, single shard):
+- 0.40ms P50 warm across all 42 Big5 query types
+- 2x-388x faster than OpenSearch 2.11 on the same hardware
 
 **Scalability**:
-- Linear throughput scaling: 2× nodes ≈ 2× QPS
+- Zero degradation from 10M to 116M docs (OS degrades 3-10x)
+- Linear throughput scaling: 2x nodes ≈ 2x QPS
 - Aggregation merge overhead: <10% vs single-node
 
 **Reliability**:
@@ -440,9 +441,9 @@ settings:
 ```
 
 **Benefits**:
-- 40-70% storage savings (compression)
-- 2-4× faster range queries (SIMD filters)
-- 50% cost reduction vs OpenSearch
+- 2-289x faster range queries (measured on 116M docs)
+- 2-388x faster sort queries
+- Sub-millisecond warm latency across all query types
 
 ---
 
@@ -585,48 +586,67 @@ curl -X POST "http://localhost:9200/my-index/_search?pipeline=my-pipeline" \
 
 ---
 
-## Comparison: CONJUGATE vs OpenSearch
+## Benchmark: CONJUGATE vs OpenSearch 2.11
+
+Measured on 116,000,000 documents (Big5 workload), single shard, same machine, same data.
+10 iterations, 3 warmup rounds, `size=0`. Full report: [BIG5_BENCHMARK_REPORT_V10.md](BIG5_BENCHMARK_REPORT_V10.md).
+
+### Query Latency (P50, warm)
+
+| Category | Queries | CONJ P50 | OS P50 | Speedup |
+|----------|---------|----------|--------|---------|
+| Text Querying | 6 | 0.40ms | 1.02ms | 1.9-3.7x |
+| Sorting | 13 | 0.39ms | 26.03ms | 2.0-387.8x |
+| Date Histogram | 4 | 0.40ms | 1.23ms | 2.3-3.7x |
+| Range Queries | 10 | 0.41ms | 16.04ms | 2.1-288.8x |
+| Terms Aggregation | 9 | 0.39ms | 0.99ms | 2.1-3.0x |
+| **Total** | **42** | **0.40ms** | **9.06ms** | **1.9-387.8x** |
+
+**Result: CONJ wins 41/42 queries. OS ERROR on 1 (sort-keyword-can-match). OS wins 0.**
+
+### Scaling Behavior (10M to 116M docs)
+
+| Query | OS 10M P50 | OS 116M P50 | OS degradation | CONJ 116M P50 |
+|-------|-----------|-------------|----------------|---------------|
+| sort-numeric-desc-with-match | 43ms | 141ms | 3.3x slower | 0.38ms |
+| range-conjunction-big-range-big-term | 12ms | 116ms | 9.7x slower | 0.40ms |
+| range-numeric | 3ms | 21ms | 7.0x slower | 0.40ms |
+| desc-sort-timestamp | 2ms | 9ms | 4.5x slower | 0.40ms |
+
+CONJ shows zero scaling degradation from 10M to 116M.
+
+### Aggregation Parity (116M docs)
+
+| Check | Result |
+|-------|--------|
+| Range agg bucket counts (4 buckets) | EXACT |
+| Date histogram (336 hourly buckets) | EXACT |
+| Cardinality low (50 unique values) | EXACT |
+| Terms agg (50 keys, 116M total) | Same keys, ±4% per-key variance |
+| Cardinality high (~116M unique) | 3.6% diff (different estimation algorithms) |
+| Range sub-agg avg | <0.3% diff (NDV 200K sample vs full scan) |
+
+### Indexing Throughput (116M docs)
+
+| Engine | Throughput | Notes |
+|--------|-----------|-------|
+| CONJ | ~25,800 docs/sec | Stable, no degradation |
+| OS 2.11 | ~29,700 docs/sec | ~15% faster |
+
+### Comparison
 
 | Feature | OpenSearch | CONJUGATE |
 |---------|------------|-----------|
 | **API Compatibility** | 100% (reference) | 100% (DSL), 90% (PPL) |
-| **Core Engine** | Lucene (Java) | Diagon (C++, Lucene + ClickHouse) |
-| **Performance** | Baseline | 4-8× faster (SIMD BM25) |
-| **Storage** | Baseline | 40-70% smaller (compression) |
-| **Columnar Storage** | ❌ Limited | ✅ Native (ClickHouse-style) |
-| **Python Pipelines** | ❌ No | ✅ Native (embedded CPython) |
-| **Query Optimizer** | Rule-based | Custom Go planner (cost-based) |
-| **Node Specialization** | Generic | Inverted, Forward, Computation |
-| **SIMD Acceleration** | ❌ No | ✅ AVX2/NEON |
+| **Core Engine** | Lucene (Java) | Diagon (C++, Lucene-compatible) |
+| **Query Latency (116M docs)** | 9.06ms avg P50 | 0.40ms avg P50 |
+| **Sorting (worst case)** | 141ms P50 | 0.38ms P50 |
+| **Range Queries (worst case)** | 116ms P50 | 0.40ms P50 |
+| **Indexing** | ~29,700 docs/sec | ~25,800 docs/sec |
+| **Scaling (10M→116M)** | 3-10x degradation | No degradation |
+| **Columnar Storage** | Limited | Native (NumericDocValues) |
+| **SIMD Acceleration** | No | AVX2/NEON |
 | **Cloud-Native** | Helm charts | K8S operator |
-
----
-
-## Performance Targets
-
-### Throughput
-
-| Metric | Target | Baseline (OpenSearch) |
-|--------|--------|------------------------|
-| Indexing | 100k docs/sec/node | ~50k docs/sec/node |
-| Query Rate | 10k queries/sec (10-node) | ~5k queries/sec |
-
-### Latency
-
-| Query Type | Target (p99) | Baseline |
-|------------|--------------|----------|
-| Term Query | <10ms | ~20ms |
-| Boolean Query (5 clauses) | <50ms | ~100ms |
-| Aggregation (group by) | <100ms | ~200ms |
-| PPL (3-stage pipeline) | <200ms | N/A |
-
-### Storage
-
-| Metric | Target | Baseline |
-|--------|--------|----------|
-| Compression Ratio | 3-5× | 2-3× |
-| Storage Overhead | 30-40% smaller | Baseline |
-| Skip Index Pruning | 90%+ granules | ~70% |
 
 ---
 
@@ -780,13 +800,9 @@ CONJUGATE is built upon the foundational work of:
 
 ---
 
-**Status**: 🎨 Design Phase - [Implementation Roadmap](IMPLEMENTATION_ROADMAP.md)
+**Last Updated**: 2026-03-14
 
-**Version**: 1.0.0-design
-
-**Last Updated**: 2026-01-26
-
-**Estimated 1.0 Release**: Month 18 (Mid 2027)
+**Latest Benchmark**: 116M docs, 42 queries, CONJ wins 41/42 — [Full Report](BIG5_BENCHMARK_REPORT_V10.md)
 
 ---
 
