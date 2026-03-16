@@ -1847,10 +1847,23 @@ func (s *Shard) Commit() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// First commit: flush buffered docs + write segments_N
 	if !C.diagon_commit(s.writer) {
 		errMsg := C.GoString(C.diagon_last_error())
 		return fmt.Errorf("commit failed: %s", errMsg)
 	}
+
+	// Wait for background merges triggered by the commit
+	C.diagon_wait_for_merges(s.writer)
+
+	// Persist merge results to segments_N (lightweight — no flush, no re-merge)
+	if !C.diagon_commit_merge_results(s.writer) {
+		errMsg := C.GoString(C.diagon_last_error())
+		return fmt.Errorf("commit merge results failed: %s", errMsg)
+	}
+
+	// Trigger cascading merges for next cycle
+	C.diagon_maybe_merge(s.writer)
 
 	s.logger.Debug("Committed changes")
 	return nil
@@ -1879,6 +1892,13 @@ func (s *Shard) Refresh() error {
 	if !C.diagon_commit(s.writer) {
 		errMsg := C.GoString(C.diagon_last_error())
 		return fmt.Errorf("commit failed during refresh: %s", errMsg)
+	}
+
+	// Wait for background merges and persist results
+	C.diagon_wait_for_merges(s.writer)
+	if !C.diagon_commit_merge_results(s.writer) {
+		errMsg := C.GoString(C.diagon_last_error())
+		return fmt.Errorf("commit merge results failed during refresh: %s", errMsg)
 	}
 
 	// Close old reader and searcher
